@@ -1,0 +1,99 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Byte-compiled / optimized
+*.pyc
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.yaml
+secrets.yml
+
+# --- pandas / Jupyter / data science ---
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+*.log
+
+# Datos pesados / generados (dejar solo lo versionado a mano en data/raw si corresponde)
+data/interim/
+data/processed/
+data/external/
+*.csv
+*.parquet
+*.pkl
+*.pickle
+*.xlsx
+!data/**/*.md
+
+# --- Triple stores / RDF ---
+# Apache Jena Fuseki
+fuseki/
+run/
+*.tdb/
+tdb/
+tdb2/
+databases/
+
+# GraphDB
+graphdb-data/
+*.ttl.bak
+
+# RDF / grafo generado por el ETL (se regenera desde la DB, no se versiona)
+output/
+graph/
+*.nt
+*.trig
+*.nq
+
+# Logs de bases de datos / dumps temporales
+*.sql.bak
+*.dump.bak
+
+# --- Docker (si se usa para levantar Postgres / triple store) ---
+docker-compose.override.yml
+.docker/
+
+# --- Editores / SO ---
+.DS_Store
+.vscode/
+.idea/
+*.swp
