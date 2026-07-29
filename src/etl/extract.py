@@ -4,7 +4,28 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-conn = psycopg2.connect()
+# Columnas que están en todas las tablas pero no son dato de dominio (son
+# metadata del CMS/auditoría, no forman parte del mapeo ontológico) - se
+# excluyen de todos los SELECT.
+NON_DOMAIN_FIELDS = {'createdAt', 'updatedAt', 'featured'}
+
+# Tablas principales, tienen su propia entidad en el mapeo ontológico
+TABLES = ['Member', 'Project', 'Publication', 'Scholarship', 'Thesis']
+
+# Tablas de join N:M que arma Prisma, cada una solo tiene las columnas A y B
+# (las FK). No tienen entidad propia, pero son la fuente de las propiedades
+# de objeto (vivo:authorOf, vivo:relatedBy, etc.) del mapeo ontológico.
+JOIN_TABLES = [
+    '_ProjectMembers',
+    '_ProjectPublications',
+    '_ProjectScholarships',
+    '_ProjectTheses',
+    '_PublicationMembers',
+    '_ScholarshipMembers',
+    '_ThesisMembers',
+    '_ThesisPublications',
+    '_ThesisScholarships',
+]
 
 def get_db_connection():
     try:
@@ -20,30 +41,48 @@ def get_db_connection():
     except Exception as e:
         print(f"Error conectando a la base de datos: {e}")
         return None
-    
+
+def get_table_fields(cur, table, exclude=NON_DOMAIN_FIELDS):
+    """Trae los nombres de columna reales de `table` desde information_schema
+    y los devuelve como un string separado por comas y entre comillas dobles,
+    listo para usar en un SELECT, salteando las columnas de `exclude`."""
+    cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s
+        ORDER BY ordinal_position
+        """,
+        (table,)
+    )
+    columns = [row[0] for row in cur.fetchall()]
+    return ', '.join(f'"{column}"' for column in columns if column not in exclude)
+
 def extraction():
-    # Cursor para interactuar con la bd
-    # cur = conn.cursor()
+    conn = get_db_connection()
+    if conn is None:
+        raise RuntimeError(
+            "No se pudo conectar a la base de datos"
+        )
 
-    tables = ['Member', 'Project', 'Publication', 'Scholarship', 'Thesis']
-    fields = [
-        'id, firstName, lastName, slug, startDate, endDate, highestDegree, coursesAtUNLP, positionAtLab, positionAtUnlp, category, sicadiCategory, positionAtCIC, positionAtCONICET, personalEmail, institutionalEmail, phone, webPage, orcid, dblpProfile, googleResearchProfile, researchGateProfile, shortCvInSpanish, shortCvInEnglish, interestsInEnglish, interestsInSpanish, affiliations, avatarUrl, tags, createdAt, updatedAt',
-        'id, title, code, slug, startDate, endDate, director, coDirector, responsibleGroup, fundingAgency, amount, summary, website, tags, featured, createdAt, updatedAt',
-        'id, slug, type, title, authors, year, ranking, selfArchivingUrl, bibtexData, tags, featured, createdAt, updatedAt',
-        'id, title, slug, type, student, director, coDirector, fundingAgency, startDate, endDate, summary, tags, createdAt, updatedAt',
-        'id, title, slug, career, level, student, director, coDirector, otherAdvisors, startDate, endDate, summary, reportUrl, progress, keywords, website, tags, featured, createdAt, updatedAt',
-    ]
+    cur = conn.cursor()
+    dataframes = {}
 
-    for i in range (1, len(tables)):
-        query = f"SELECT {fields[i]} FROM {tables[i]}"
-        pd.read_sql(query, conn)
+    try:
+        all_tables = TABLES + JOIN_TABLES
+        fields = [get_table_fields(cur, table) for table in all_tables]
 
-    # Manejar N/A en tabla Members
+        for table, table_fields in zip(all_tables, fields):
+            query = f'SELECT {table_fields} FROM public."{table}"'
+            dataframes[table] = pd.read_sql(query, conn)
 
-    cur.execute("""
+        # En Member, algunos campos de texto usan "N/A" a mano en vez de un
+        # NULL real (es la única tabla que lo hace). Se normaliza todo a NULL
+        # para que el "sin dato" sea siempre lo mismo en todo el dataset.
+        dataframes['Member'] = dataframes['Member'].replace('N/A', None)
+    finally:
+        # Cierro conexion
+        cur.close()
+        conn.close()
 
-                """)
-
-    # Cierro cursor y conexión a la bd
-    cur.close()
-    conn.close()
+    return dataframes
