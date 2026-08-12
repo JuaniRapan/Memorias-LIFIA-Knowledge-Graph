@@ -1,7 +1,8 @@
 """Capa de transformación: arma el grafo RDF a partir de los CSV que deja
-extract.py."""
+extract.py, mapeando cada campo según docs/mapeos_ontologicos.md."""
 
 import csv
+import difflib
 import os
 import re
 import unicodedata
@@ -224,9 +225,18 @@ def transform_members(graph, df_member, topic_uris):
         add_literal(graph, uri, FOAF.phone, row["phone"])
         add_literal(graph, uri, FOAF.homepage, row["webPage"], as_uri=True)
         add_literal(graph, uri, FOAF.depiction, row["avatarUrl"], as_uri=True)
+        add_literal(graph, uri, VIVO.highestDegree, row["highestDegree"])
         add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtLab"])
+        add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtUnlp"])
+        add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtCIC"])
+        add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtCONICET"])
         add_literal(graph, uri, RDFS.comment, row["category"])
+        add_literal(graph, uri, RDFS.comment, row["sicadiCategory"])
         add_literal(graph, uri, VIVO.overview, row["shortCvInSpanish"])
+        add_literal(graph, uri, VIVO.overview, row["shortCvInEnglish"])
+        add_literal(graph, uri, VIVO.overview, row["interestsInSpanish"])
+        add_literal(graph, uri, VIVO.overview, row["interestsInEnglish"])
+        add_literal(graph, uri, RDFS.comment, row["affiliations"])
         add_interval(graph, uri, row["startDate"], row["endDate"])
 
         orcid_id = clean_orcid(row["orcid"])
@@ -254,7 +264,10 @@ def transform_projects(graph, df_project, topic_uris):
         add_literal(graph, uri, RDFS.label, row["title"])
         add_literal(graph, uri, VIVO.localAwardId, row["code"])
         add_literal(graph, uri, RDFS.comment, row["fundingAgency"])
+        add_literal(graph, uri, VIVO.totalAwardAmount, row["amount"])
         add_literal(graph, uri, VIVO.description, row["summary"])
+        add_literal(graph, uri, VIVO.webpage, row["website"], as_uri=True)
+        add_literal(graph, uri, RDFS.comment, row["responsibleGroup"])
         add_interval(graph, uri, row["startDate"], row["endDate"])
 
         add_topics(graph, uri, row["tags"], topic_uris, VIVO.hasSubjectArea)
@@ -420,6 +433,80 @@ def transform_relations(graph, dataframes, uri_lookup):
 
 
 # ---------------------------------------------------------------------------
+# Relaciones de texto libre: director/coDirector/student/otherAdvisors no
+# son FK, hay que resolverlas contra Member buscando por nombre
+# ---------------------------------------------------------------------------
+
+def normalize_name(name):
+    if not has_value(name):
+        return ""
+    name = unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode()
+    return re.sub(r"\s+", " ", name).strip().lower()
+
+
+def build_member_name_index(df_member, uri_lookup):
+    """Arma {nombre completo normalizado: uri_persona} para resolver texto libre contra Member."""
+    index = {}
+    for _, row in df_member.iterrows():
+        full_name = normalize_name(f"{row['firstName']} {row['lastName']}")
+        if full_name:
+            index[full_name] = uri_lookup[row["id"]]
+    return index
+
+
+def resolve_person(name, name_index, threshold=0.85):
+    """Busca `name` en name_index: match exacto, y si no, fuzzy con difflib. None si no hay nada confiable."""
+    normalized = normalize_name(name)
+    if not normalized:
+        return None
+    if normalized in name_index:
+        return name_index[normalized]
+    matches = difflib.get_close_matches(normalized, name_index.keys(), n=1, cutoff=threshold)
+    return name_index[matches[0]] if matches else None
+
+
+# (tabla, columna, propiedad RDF) para cada campo de texto libre que hay
+# que resolver
+TEXT_RELATIONS = [
+    ("Project", "director", VIVO.hasPrincipalInvestigatorRole),
+    ("Project", "coDirector", VIVO.hasPrincipalInvestigatorRole),
+    ("Scholarship", "director", VIVO.relates),
+    ("Scholarship", "coDirector", VIVO.relates),
+    ("Scholarship", "student", VIVO.relates),
+    ("Thesis", "director", VIVO.relates),
+    ("Thesis", "coDirector", VIVO.relates),
+    ("Thesis", "student", VIVO.relates),
+    ("Thesis", "otherAdvisors", VIVO.relates),
+]
+
+
+def transform_text_relations(graph, dataframes, uri_lookup, name_index):
+    """Resuelve director/coDirector/student/otherAdvisors contra Member; devuelve los nombres que no matchearon."""
+    unresolved = []
+
+    for table, column, predicate in TEXT_RELATIONS:
+        for _, row in dataframes[table].iterrows():
+            subject_uri = uri_lookup.get(row["id"])
+            raw_value = row[column]
+            if subject_uri is None or not has_value(raw_value) or not str(raw_value).strip():
+                continue
+
+            # otherAdvisors (y a veces director/student) puede traer más
+            # de un nombre separado por coma, "y" o "and"
+            for name in re.split(r",| y | and ", str(raw_value)):
+                name = name.strip()
+                if not name:
+                    continue
+                person_uri = resolve_person(name, name_index)
+                if person_uri is not None:
+                    graph.add((subject_uri, predicate, person_uri))
+                else:
+                    unresolved.append((table, column, name))
+
+    return unresolved
+
+
+# ---------------------------------------------------------------------------
 # Venues: no tienen tabla propia en la base, salen del bibtexData de cada
 # Publication
 # ---------------------------------------------------------------------------
@@ -492,6 +579,17 @@ def transformation(dataframes=None):
     uri_lookup.update(transform_theses(graph, dataframes["Thesis"], topic_uris))
 
     transform_relations(graph, dataframes, uri_lookup)
+
+    name_index = build_member_name_index(dataframes["Member"], uri_lookup)
+    unresolved = transform_text_relations(graph, dataframes, uri_lookup, name_index)
+    if unresolved:
+        os.makedirs("data/processed", exist_ok=True)
+        unresolved_path = "data/processed/relaciones_sin_resolver.csv"
+        with open(unresolved_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["tabla", "columna", "nombre"])
+            writer.writerows(unresolved)
+        print(f"{len(unresolved)} nombres no matchearon contra ningún Member, se guardaron en {unresolved_path} para revisar a mano")
 
     return graph
 
