@@ -20,6 +20,9 @@ from extract import load_interim
 # ---------------------------------------------------------------------------
 
 LIFIA = Namespace("http://lifia.info.unlp.edu.ar/resource/")
+# namespace aparte (no "resource/") para las pocas propiedades que inventamos
+# nosotros porque ninguna ontología externa las tiene (ver docs/mapeos_ontologicos.md)
+LIFIA_ONTOLOGY = Namespace("http://lifia.info.unlp.edu.ar/ontology/")
 VIVO = Namespace("http://vivoweb.org/ontology/core#")
 BIBO = Namespace("http://purl.org/ontology/bibo/")
 CSO = Namespace("http://cso.kmi.open.ac.uk/schema/cso#")
@@ -323,7 +326,13 @@ def transform_theses(graph, df_thesis, topic_uris):
         add_literal(graph, uri, VIVO.description, row["summary"])
         add_literal(graph, uri, BIBO.uri, row["reportUrl"], as_uri=True)
         add_literal(graph, uri, BIBO.uri, row["website"], as_uri=True)
-        add_literal(graph, uri, RDFS.comment, row["progress"])
+        # progress es el % de avance (0-100), no una nota de texto: no va como
+        # rdfs:comment. Ninguna ontología de las que usamos tiene una
+        # propiedad para esto, así que se define una propia (ver Namespaces)
+        progress = row["progress"]
+        if has_value(progress) and isinstance(progress, float):
+            progress = int(progress)
+        add_literal(graph, uri, LIFIA_ONTOLOGY.completionPercentage, progress)
         add_interval(graph, uri, row["startDate"], row["endDate"])
         add_topics(graph, uri, row["tags"], topic_uris, VIVO.hasSubjectArea)
 
@@ -702,6 +711,7 @@ def transformation(dataframes=None):
 
     graph = Graph()
     graph.bind("lifia", LIFIA)
+    graph.bind("lifia-ontology", LIFIA_ONTOLOGY)
     graph.bind("vivo", VIVO)
     graph.bind("bibo", BIBO)
     graph.bind("cso", CSO)
