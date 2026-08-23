@@ -1,0 +1,84 @@
+# Infraestructura del pipeline CDC: Postgres (con logical replication
+# habilitada) + Zookeeper + Kafka + Kafka Connect con el plugin de
+# Debezium ya instalado adentro de la imagen.
+
+services:
+  postgres:
+    image: debezium/postgres:17
+    container_name: lifia-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    # Toma DB_NAME/DB_USER/DB_PASSWORD del .env de la raíz (hay que correr
+    # docker compose con --env-file ../.env para que Compose lo encuentre,
+    # ver instrucciones). El :-valor es el default si la variable no está
+    # seteada, así no se rompe en silencio si alguien se olvida del flag.
+    environment:
+      POSTGRES_DB: ${DB_NAME:-lifia_db}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    # La imagen debezium/postgres ya trae wal_level=logical de fábrica,
+    # pero lo dejamos explícito acá para que quede claro y no dependamos
+    # de un default que no vemos.
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "max_replication_slots=10"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ../data/raw/new_memorias_para_kgsw.dump:/docker-entrypoint-initdb.d/new_memorias_para_kgsw.dump:ro
+      - ./postgres-init/01-restore-dump.sh:/docker-entrypoint-initdb.d/01-restore-dump.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-lifia_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  zookeeper:
+    image: debezium/zookeeper:2.7.3.Final
+    container_name: lifia-zookeeper
+    ports:
+      - "2181:2181"
+    volumes:
+      - zk_data:/zookeeper/data
+      - zk_log:/zookeeper/log
+
+  kafka:
+    image: debezium/kafka:2.7.3.Final
+    container_name: lifia-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_data:/kafka/data
+
+  connect:
+    image: debezium/connect:2.7.3.Final
+    container_name: lifia-connect
+    depends_on:
+      kafka:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: lifia-cdc
+      CONFIG_STORAGE_TOPIC: lifia_connect_configs
+      OFFSET_STORAGE_TOPIC: lifia_connect_offsets
+      STATUS_STORAGE_TOPIC: lifia_connect_statuses
+
+volumes:
+  pg_data:
+  zk_data:
+  zk_log:
+  kafka_data:
