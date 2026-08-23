@@ -140,7 +140,7 @@ def load_cso_lookup(cache_path=CSO_CACHE_PATH):
     #     label canónico "objeto" (ej "web pages" bajo "web content")
     if not os.path.exists(cache_path):
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-        print("Bajando el vocabulario de CSO (la primera vez nomás, después queda cacheado)...")
+        print("Bajando el vocabulario de CSO (solo la primera vez, después queda cacheado)...")
         urllib.request.urlretrieve(CSO_CSV_URL, cache_path)
 
     primary_label = {}
@@ -437,32 +437,111 @@ def transform_relations(graph, dataframes, uri_lookup):
 # son FK, hay que resolverlas contra Member buscando por nombre
 # ---------------------------------------------------------------------------
 
+# títulos que a veces vienen pegados al nombre ("Dra. Roxana Giandini.") y que
+# hay que sacar antes de comparar, si no ensucian tanto el match exacto como el fuzzy
+ACADEMIC_TITLES = {"dr", "dra", "lic", "ing", "mg", "mgter", "prof", "mtro", "mtra"}
+
+
 def normalize_name(name):
     if not has_value(name):
         return ""
     name = unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode()
-    return re.sub(r"\s+", " ", name).strip().lower()
+    # las comas también aparecen dentro de un solo nombre en formato
+    # "Apellido, Nombre", no solo separando a dos personas distintas
+    name = re.sub(r"[.,]", " ", name)
+    words = [w for w in name.strip().lower().split() if w not in ACADEMIC_TITLES]
+    return " ".join(words)
 
 
 def build_member_name_index(df_member, uri_lookup):
-    """Arma {nombre completo normalizado: uri_persona} para resolver texto libre contra Member."""
+    """Arma (índice de variantes normalizadas -> uri_persona, lista de
+    (conjunto de palabras del nombre, uri_persona)) para resolver texto libre
+    escrito de formas distintas. El índice cubre orden normal, invertido, sin
+    nombres del medio, y nombre/apellido solo si no es ambiguo entre Member."""
     index = {}
+    ambiguous = set()
+    wordsets = []
+
+    def register(key, uri):
+        if key in index and index[key] != uri:
+            ambiguous.add(key)
+        else:
+            index[key] = uri
+
     for _, row in df_member.iterrows():
         full_name = normalize_name(f"{row['firstName']} {row['lastName']}")
-        if full_name:
-            index[full_name] = uri_lookup[row["id"]]
-    return index
+        if not full_name:
+            continue
+        uri = uri_lookup[row["id"]]
+        words = full_name.split()
+
+        register(full_name, uri)
+        if len(words) >= 2:
+            register(" ".join(reversed(words)), uri)
+            register(f"{words[0]} {words[-1]}", uri)
+            # nombre y apellido solos: sirven para resolver fragmentos partidos
+            # mal, pero solo si son únicos en el lab,
+            # si no los sacamos abajo para no adivinar mal
+            register(words[0], uri)
+            register(words[-1], uri)
+            wordsets.append((frozenset(words), uri))
+
+    for key in ambiguous:
+        del index[key]
+
+    return index, wordsets
 
 
-def resolve_person(name, name_index, threshold=0.85):
-    """Busca `name` en name_index: match exacto, y si no, fuzzy con difflib. None si no hay nada confiable."""
+def _name_candidates(normalized):
+    """Variantes de un nombre ya normalizado para probar contra el índice:
+    tal cual vino, invertido, y solo la primera y la última palabra."""
+    words = normalized.split()
+    candidates = [normalized]
+    if len(words) >= 2:
+        candidates.append(" ".join(reversed(words)))
+        candidates.append(f"{words[0]} {words[-1]}")
+    return candidates
+
+
+def resolve_exact(name, name_index):
+    """Busca `name` como UNA sola persona, probando el orden en que vino,
+    invertido, y sin nombres del medio."""
+    index, _ = name_index
     normalized = normalize_name(name)
     if not normalized:
         return None
-    if normalized in name_index:
-        return name_index[normalized]
-    matches = difflib.get_close_matches(normalized, name_index.keys(), n=1, cutoff=threshold)
-    return name_index[matches[0]] if matches else None
+    for candidate in _name_candidates(normalized):
+        if candidate in index:
+            return index[candidate]
+    return None
+
+
+def resolve_person(name, name_index, threshold=0.85):
+    """Busca `name` contra un Member: primero match exacto (`resolve_exact`);
+    si no, por subconjunto de palabras (nombre y apellido del Member están,
+    en cualquier orden, entre las palabras del texto pero solo si matchea
+    un único Member); y si tampoco, fuzzy
+    con difflib. None si no hay nada confiable."""
+    index, wordsets = name_index
+    person_uri = resolve_exact(name, name_index)
+    if person_uri is not None:
+        return person_uri
+
+    normalized = normalize_name(name)
+    if not normalized:
+        return None
+    query_words = set(normalized.split())
+
+    subset_matches = {uri for member_words, uri in wordsets if member_words <= query_words}
+    if len(subset_matches) == 1:
+        return subset_matches.pop()
+
+    for candidate in _name_candidates(normalized):
+        matches = difflib.get_close_matches(candidate, index.keys(), n=1, cutoff=threshold)
+        if matches:
+            return index[matches[0]]
+
+    return None
 
 
 # (tabla, columna, propiedad RDF) para cada campo de texto libre que hay
@@ -479,10 +558,62 @@ TEXT_RELATIONS = [
     ("Thesis", "otherAdvisors", VIVO.relates),
 ]
 
+# un nombre de persona real, en este dataset, nunca tiene más de 4 palabras
+# "de contenido"; si un fragmento tiene más, es más probable que sea un dato
+# mal cargado que un nombre. 
+MAX_NAME_WORDS = 4
+NAME_PARTICLES = {"de", "del", "la", "las", "los"}
 
-def transform_text_relations(graph, dataframes, uri_lookup, name_index):
-    """Resuelve director/coDirector/student/otherAdvisors contra Member; devuelve los nombres que no matchearon."""
-    unresolved = []
+
+def looks_like_a_name(name):
+    """False si `name` parece no ser un nombre de persona (demasiadas
+    palabras de contenido: un título de tesis, una oración, etc.)."""
+    content_words = [w for w in normalize_name(name).split() if w not in NAME_PARTICLES]
+    return len(content_words) <= MAX_NAME_WORDS
+
+
+def strip_label_prefix(raw_value):
+    """Saca etiquetas y deja solo el nombre, si el campo trae dos puntos."""
+    return raw_value.rsplit(":", 1)[-1].strip()
+
+
+def split_names(raw_value):
+    """Separa un campo de texto libre en nombres individuales por coma, "y",
+    "and", guion o barra (todas formas que aparecen en la base para separar
+    a más de una persona en el mismo campo)."""
+    raw_value = strip_label_prefix(str(raw_value))
+    return [name.strip() for name in re.split(r",| y | and |\s-\s|/", raw_value) if name.strip()]
+
+
+def get_or_create_external_person(graph, name, external_uris):
+    """Crea (o reusa) un nodo foaf:Person liviano para alguien mencionado en la
+    base que no está cargado como Member, para no perder la relación ni
+    confundirlo con el personal del LIFIA (no lleva vivo:FacultyMember)."""
+    normalized = normalize_name(name)
+    if normalized in external_uris:
+        return external_uris[normalized]
+
+    slug = slugify(name)
+    if not slug:
+        return None
+
+    uri = make_uri("persona-externa", slug)
+    graph.add((uri, RDF.type, FOAF.Person))
+    graph.add((uri, FOAF.name, Literal(name.strip())))
+    graph.add((uri, RDFS.comment, Literal(
+        "Persona mencionada en la base del LIFIA pero no cargada como "
+        "integrante (Member); no se pudo resolver contra ningún Member existente."
+    )))
+    external_uris[normalized] = uri
+    return uri
+
+
+def transform_text_relations(graph, dataframes, uri_lookup, name_index, external_uris):
+    """Resuelve director/coDirector/student/otherAdvisors contra Member, o contra
+    una persona externa si no matchea. Devuelve un log de qué pasó con cada nombre
+    que no matcheó ningún Member (creado como externo, o descartado si ni siquiera
+    tiene forma de nombre de persona)."""
+    log = []
 
     for table, column, predicate in TEXT_RELATIONS:
         for _, row in dataframes[table].iterrows():
@@ -491,19 +622,32 @@ def transform_text_relations(graph, dataframes, uri_lookup, name_index):
             if subject_uri is None or not has_value(raw_value) or not str(raw_value).strip():
                 continue
 
-            # otherAdvisors (y a veces director/student) puede traer más
-            # de un nombre separado por coma, "y" o "and"
-            for name in re.split(r",| y | and ", str(raw_value)):
-                name = name.strip()
-                if not name:
-                    continue
-                person_uri = resolve_person(name, name_index)
+            # antes de partir el campo en varias personas, probamos si en
+            # realidad es una sola escrita "Apellido, Nombre" (la coma no
+            # siempre separa a dos personas distintas). Acá se usa
+            # resolve_exact, no resolve_person, porque el match "flexible"
+            # por subconjunto de palabras podría, en un campo con dos
+            # personas, quedarse con la que sí matchea y perder a la otra
+            clean_value = strip_label_prefix(str(raw_value))
+            whole_value_uri = resolve_exact(clean_value, name_index)
+            names = [clean_value] if whole_value_uri is not None else split_names(raw_value)
+
+            for name in names:
+                person_uri = whole_value_uri if whole_value_uri is not None else resolve_person(name, name_index)
                 if person_uri is not None:
                     graph.add((subject_uri, predicate, person_uri))
-                else:
-                    unresolved.append((table, column, name))
+                    continue
 
-    return unresolved
+                if not looks_like_a_name(name):
+                    log.append((table, column, name, "descartado (no tiene forma de nombre de persona)"))
+                    continue
+
+                external_uri = get_or_create_external_person(graph, name, external_uris)
+                if external_uri is not None:
+                    graph.add((subject_uri, predicate, external_uri))
+                    log.append((table, column, name, "creado como persona externa (no es Member)"))
+
+    return log
 
 
 # ---------------------------------------------------------------------------
@@ -581,15 +725,22 @@ def transformation(dataframes=None):
     transform_relations(graph, dataframes, uri_lookup)
 
     name_index = build_member_name_index(dataframes["Member"], uri_lookup)
-    unresolved = transform_text_relations(graph, dataframes, uri_lookup, name_index)
-    if unresolved:
+    external_uris = {}
+    resolution_log = transform_text_relations(graph, dataframes, uri_lookup, name_index, external_uris)
+    if resolution_log:
         os.makedirs("data/processed", exist_ok=True)
-        unresolved_path = "data/processed/relaciones_sin_resolver.csv"
-        with open(unresolved_path, "w", newline="", encoding="utf-8") as f:
+        log_path = "data/processed/relaciones_sin_resolver.csv"
+        with open(log_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["tabla", "columna", "nombre"])
-            writer.writerows(unresolved)
-        print(f"{len(unresolved)} nombres no matchearon contra ningún Member, se guardaron en {unresolved_path} para revisar a mano")
+            writer.writerow(["tabla", "columna", "nombre", "resultado"])
+            writer.writerows(resolution_log)
+        externos = sum(1 for _, _, _, resultado in resolution_log if resultado.startswith("creado"))
+        descartados = len(resolution_log) - externos
+        print(
+            f"{len(resolution_log)} nombres no matchearon contra ningún Member: "
+            f"{externos} se crearon como persona-externa, {descartados} se descartaron "
+            f"por no tener forma de nombre. Detalle en {log_path}"
+        )
 
     return graph
 
