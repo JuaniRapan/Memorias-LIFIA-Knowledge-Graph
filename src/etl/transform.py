@@ -167,9 +167,29 @@ def load_cso_lookup(cache_path=CSO_CACHE_PATH):
     return lookup
 
 
+def resolve_topic_uri(graph, tag, cso_lookup):
+    """Devuelve la URI de un tema: la de CSO si `tag` matchea, si no un
+    cso:Topic local (crea el nodo en el grafo la primera vez que se pide)."""
+    cso_uri = cso_lookup.get(normalize_topic_label(tag))
+    if cso_uri is not None:
+        return cso_uri
+
+    slug = slugify(tag)
+    if not slug:
+        return None
+
+    uri = make_uri("tema", slug)
+    if (uri, RDF.type, CSO.Topic) not in graph:
+        graph.add((uri, RDF.type, CSO.Topic))
+        graph.add((uri, RDF.type, SKOS.Concept))
+        graph.add((uri, RDFS.label, Literal(tag)))
+        graph.add((uri, SKOS.prefLabel, Literal(tag)))
+    return uri
+
+
 def transform_topics(graph, dataframes):
-    """Junta todos los tags/keywords del dataset, los matchea contra CSO
-    (reusando su URI) o crea un cso:Topic local. Devuelve {tag: uri}."""
+    """Junta todos los tags/keywords del dataset y resuelve la URI de cada
+    uno (CSO si matchea, si no un recurso local). Devuelve {tag: uri}."""
     all_tags = set()
 
     for table in ("Member", "Project", "Publication", "Thesis"):
@@ -186,21 +206,12 @@ def transform_topics(graph, dataframes):
     topic_uris = {}
     matcheados = 0
     for tag in sorted(all_tags):
-        cso_uri = cso_lookup.get(normalize_topic_label(tag))
-        if cso_uri is not None:
-            topic_uris[tag] = cso_uri
-            matcheados += 1
+        uri = resolve_topic_uri(graph, tag, cso_lookup)
+        if uri is None:
             continue
-
-        slug = slugify(tag)
-        if not slug:
-            continue
-        uri = make_uri("tema", slug)
-        graph.add((uri, RDF.type, CSO.Topic))
-        graph.add((uri, RDF.type, SKOS.Concept))
-        graph.add((uri, RDFS.label, Literal(tag)))
-        graph.add((uri, SKOS.prefLabel, Literal(tag)))
         topic_uris[tag] = uri
+        if normalize_topic_label(tag) in cso_lookup:
+            matcheados += 1
 
     print(f"Temas: {matcheados} de {len(topic_uris)} matchearon contra CSO, el resto quedó como recurso local")
     return topic_uris
@@ -210,92 +221,104 @@ def transform_topics(graph, dataframes):
 # Transformación de entidades
 # ---------------------------------------------------------------------------
 
+def transform_member_row(graph, row, topic_uris):
+    """Convierte una fila de Member en un vivo:FacultyMember/foaf:Person. Devuelve su URI."""
+    uri = make_uri("persona", row["slug"])
+
+    graph.add((uri, RDF.type, VIVO.FacultyMember))
+    graph.add((uri, RDF.type, FOAF.Person))
+
+    add_literal(graph, uri, FOAF.firstName, row["firstName"])
+    add_literal(graph, uri, FOAF.lastName, row["lastName"])
+    add_literal(graph, uri, FOAF.mbox, row["personalEmail"])
+    add_literal(graph, uri, FOAF.mbox, row["institutionalEmail"])
+    add_literal(graph, uri, FOAF.phone, row["phone"])
+    add_literal(graph, uri, FOAF.homepage, row["webPage"], as_uri=True)
+    add_literal(graph, uri, FOAF.depiction, row["avatarUrl"], as_uri=True)
+    add_literal(graph, uri, VIVO.highestDegree, row["highestDegree"])
+    add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtLab"])
+    add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtUnlp"])
+    add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtCIC"])
+    add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtCONICET"])
+    add_literal(graph, uri, RDFS.comment, row["category"])
+    add_literal(graph, uri, RDFS.comment, row["sicadiCategory"])
+    add_literal(graph, uri, VIVO.overview, row["shortCvInSpanish"])
+    add_literal(graph, uri, VIVO.overview, row["shortCvInEnglish"])
+    add_literal(graph, uri, VIVO.overview, row["interestsInSpanish"])
+    add_literal(graph, uri, VIVO.overview, row["interestsInEnglish"])
+    add_literal(graph, uri, RDFS.comment, row["affiliations"])
+    add_interval(graph, uri, row["startDate"], row["endDate"])
+
+    orcid_id = clean_orcid(row["orcid"])
+    if orcid_id:
+        graph.add((uri, OWL.sameAs, URIRef(f"https://orcid.org/{orcid_id}")))
+    add_literal(graph, uri, OWL.sameAs, row["dblpProfile"], as_uri=True)
+    add_literal(graph, uri, RDFS.seeAlso, row["googleResearchProfile"], as_uri=True)
+    add_literal(graph, uri, RDFS.seeAlso, row["researchGateProfile"], as_uri=True)
+
+    add_topics(graph, uri, row["tags"], topic_uris, VIVO.hasResearchArea)
+    graph.add((uri, DCTERMS.identifier, Literal(row["id"])))
+
+    return uri
+
+
 def transform_members(graph, df_member, topic_uris):
-    """Convierte cada fila de Member en un vivo:FacultyMember/foaf:Person."""
+    """Convierte todas las filas de Member. Devuelve {id: uri}."""
     uri_lookup = {}
-
     for _, row in df_member.iterrows():
-        uri = make_uri("persona", row["slug"])
-        uri_lookup[row["id"]] = uri
-
-        graph.add((uri, RDF.type, VIVO.FacultyMember))
-        graph.add((uri, RDF.type, FOAF.Person))
-
-        add_literal(graph, uri, FOAF.firstName, row["firstName"])
-        add_literal(graph, uri, FOAF.lastName, row["lastName"])
-        add_literal(graph, uri, FOAF.mbox, row["personalEmail"])
-        add_literal(graph, uri, FOAF.mbox, row["institutionalEmail"])
-        add_literal(graph, uri, FOAF.phone, row["phone"])
-        add_literal(graph, uri, FOAF.homepage, row["webPage"], as_uri=True)
-        add_literal(graph, uri, FOAF.depiction, row["avatarUrl"], as_uri=True)
-        add_literal(graph, uri, VIVO.highestDegree, row["highestDegree"])
-        add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtLab"])
-        add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtUnlp"])
-        add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtCIC"])
-        add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtCONICET"])
-        add_literal(graph, uri, RDFS.comment, row["category"])
-        add_literal(graph, uri, RDFS.comment, row["sicadiCategory"])
-        add_literal(graph, uri, VIVO.overview, row["shortCvInSpanish"])
-        add_literal(graph, uri, VIVO.overview, row["shortCvInEnglish"])
-        add_literal(graph, uri, VIVO.overview, row["interestsInSpanish"])
-        add_literal(graph, uri, VIVO.overview, row["interestsInEnglish"])
-        add_literal(graph, uri, RDFS.comment, row["affiliations"])
-        add_interval(graph, uri, row["startDate"], row["endDate"])
-
-        orcid_id = clean_orcid(row["orcid"])
-        if orcid_id:
-            graph.add((uri, OWL.sameAs, URIRef(f"https://orcid.org/{orcid_id}")))
-        add_literal(graph, uri, OWL.sameAs, row["dblpProfile"], as_uri=True)
-        add_literal(graph, uri, RDFS.seeAlso, row["googleResearchProfile"], as_uri=True)
-        add_literal(graph, uri, RDFS.seeAlso, row["researchGateProfile"], as_uri=True)
-
-        add_topics(graph, uri, row["tags"], topic_uris, VIVO.hasResearchArea)
-        graph.add((uri, DCTERMS.identifier, Literal(row["id"])))
-
+        uri_lookup[row["id"]] = transform_member_row(graph, row, topic_uris)
     return uri_lookup
+
+
+def transform_project_row(graph, row, topic_uris):
+    """Convierte una fila de Project en un vivo:ResearchProject. Devuelve su URI."""
+    uri = make_uri("proyecto", row["slug"])
+
+    graph.add((uri, RDF.type, VIVO.ResearchProject))
+    add_literal(graph, uri, RDFS.label, row["title"])
+    add_literal(graph, uri, VIVO.localAwardId, row["code"])
+    add_literal(graph, uri, RDFS.comment, row["fundingAgency"])
+    add_literal(graph, uri, VIVO.totalAwardAmount, row["amount"])
+    add_literal(graph, uri, VIVO.description, row["summary"])
+    add_literal(graph, uri, VIVO.webpage, row["website"], as_uri=True)
+    add_literal(graph, uri, RDFS.comment, row["responsibleGroup"])
+    add_interval(graph, uri, row["startDate"], row["endDate"])
+
+    add_topics(graph, uri, row["tags"], topic_uris, VIVO.hasSubjectArea)
+    graph.add((uri, DCTERMS.identifier, Literal(row["id"])))
+
+    return uri
 
 
 def transform_projects(graph, df_project, topic_uris):
-    """Convierte cada fila de Project en un vivo:ResearchProject."""
+    """Convierte todas las filas de Project. Devuelve {id: uri}."""
     uri_lookup = {}
-
     for _, row in df_project.iterrows():
-        uri = make_uri("proyecto", row["slug"])
-        uri_lookup[row["id"]] = uri
-
-        graph.add((uri, RDF.type, VIVO.ResearchProject))
-        add_literal(graph, uri, RDFS.label, row["title"])
-        add_literal(graph, uri, VIVO.localAwardId, row["code"])
-        add_literal(graph, uri, RDFS.comment, row["fundingAgency"])
-        add_literal(graph, uri, VIVO.totalAwardAmount, row["amount"])
-        add_literal(graph, uri, VIVO.description, row["summary"])
-        add_literal(graph, uri, VIVO.webpage, row["website"], as_uri=True)
-        add_literal(graph, uri, RDFS.comment, row["responsibleGroup"])
-        add_interval(graph, uri, row["startDate"], row["endDate"])
-
-        add_topics(graph, uri, row["tags"], topic_uris, VIVO.hasSubjectArea)
-        graph.add((uri, DCTERMS.identifier, Literal(row["id"])))
-
+        uri_lookup[row["id"]] = transform_project_row(graph, row, topic_uris)
     return uri_lookup
 
 
+def transform_scholarship_row(graph, row, topic_uris):
+    """Convierte una fila de Scholarship en un vivo:Grant. Devuelve su URI."""
+    uri = make_uri("beca", row["slug"])
+
+    graph.add((uri, RDF.type, VIVO.Grant))
+    add_literal(graph, uri, RDFS.label, row["title"])
+    add_literal(graph, uri, RDFS.comment, row["type"])
+    add_literal(graph, uri, RDFS.comment, row["fundingAgency"])
+    add_literal(graph, uri, VIVO.description, row["summary"])
+    add_interval(graph, uri, row["startDate"], row["endDate"])
+    add_topics(graph, uri, row["tags"], topic_uris, VIVO.hasSubjectArea)
+    graph.add((uri, DCTERMS.identifier, Literal(row["id"])))
+
+    return uri
+
+
 def transform_scholarships(graph, df_scholarship, topic_uris):
-    """Convierte cada fila de Scholarship en un vivo:Grant."""
+    """Convierte todas las filas de Scholarship. Devuelve {id: uri}."""
     uri_lookup = {}
-
     for _, row in df_scholarship.iterrows():
-        uri = make_uri("beca", row["slug"])
-        uri_lookup[row["id"]] = uri
-
-        graph.add((uri, RDF.type, VIVO.Grant))
-        add_literal(graph, uri, RDFS.label, row["title"])
-        add_literal(graph, uri, RDFS.comment, row["type"])
-        add_literal(graph, uri, RDFS.comment, row["fundingAgency"])
-        add_literal(graph, uri, VIVO.description, row["summary"])
-        add_interval(graph, uri, row["startDate"], row["endDate"])
-        add_topics(graph, uri, row["tags"], topic_uris, VIVO.hasSubjectArea)
-        graph.add((uri, DCTERMS.identifier, Literal(row["id"])))
-
+        uri_lookup[row["id"]] = transform_scholarship_row(graph, row, topic_uris)
     return uri_lookup
 
 
@@ -310,38 +333,42 @@ LEVEL_TO_DEGREE = {
 }
 
 
+def transform_thesis_row(graph, row, topic_uris):
+    """Convierte una fila de Thesis en bibo:Thesis/vivo:Thesis. Devuelve su URI."""
+    uri = make_uri("tesis", row["slug"])
+
+    graph.add((uri, RDF.type, BIBO.Thesis))
+    graph.add((uri, RDF.type, VIVO.Thesis))
+    add_literal(graph, uri, DC.title, row["title"])
+    add_literal(graph, uri, BIBO.degree, LEVEL_TO_DEGREE.get(row["level"], row["level"]))
+    add_literal(graph, uri, RDFS.comment, row["career"])
+    add_literal(graph, uri, VIVO.description, row["summary"])
+    add_literal(graph, uri, BIBO.uri, row["reportUrl"], as_uri=True)
+    add_literal(graph, uri, BIBO.uri, row["website"], as_uri=True)
+    # progress es el % de avance (0-100), no una nota de texto: no va como
+    # rdfs:comment. Ninguna ontología de las que usamos tiene una
+    # propiedad para esto, así que se define una propia (ver Namespaces)
+    progress = row["progress"]
+    if has_value(progress) and isinstance(progress, float):
+        progress = int(progress)
+    add_literal(graph, uri, LIFIA_ONTOLOGY.completionPercentage, progress)
+    add_interval(graph, uri, row["startDate"], row["endDate"])
+    add_topics(graph, uri, row["tags"], topic_uris, VIVO.hasSubjectArea)
+
+    keyword = row["keywords"]
+    if has_value(keyword) and str(keyword).strip() in topic_uris:
+        graph.add((uri, VIVO.hasSubjectArea, topic_uris[str(keyword).strip()]))
+
+    graph.add((uri, DCTERMS.identifier, Literal(row["id"])))
+
+    return uri
+
+
 def transform_theses(graph, df_thesis, topic_uris):
-    """Convierte cada fila de Thesis en bibo:Thesis/vivo:Thesis."""
+    """Convierte todas las filas de Thesis. Devuelve {id: uri}."""
     uri_lookup = {}
-
     for _, row in df_thesis.iterrows():
-        uri = make_uri("tesis", row["slug"])
-        uri_lookup[row["id"]] = uri
-
-        graph.add((uri, RDF.type, BIBO.Thesis))
-        graph.add((uri, RDF.type, VIVO.Thesis))
-        add_literal(graph, uri, DC.title, row["title"])
-        add_literal(graph, uri, BIBO.degree, LEVEL_TO_DEGREE.get(row["level"], row["level"]))
-        add_literal(graph, uri, RDFS.comment, row["career"])
-        add_literal(graph, uri, VIVO.description, row["summary"])
-        add_literal(graph, uri, BIBO.uri, row["reportUrl"], as_uri=True)
-        add_literal(graph, uri, BIBO.uri, row["website"], as_uri=True)
-        # progress es el % de avance (0-100), no una nota de texto: no va como
-        # rdfs:comment. Ninguna ontología de las que usamos tiene una
-        # propiedad para esto, así que se define una propia (ver Namespaces)
-        progress = row["progress"]
-        if has_value(progress) and isinstance(progress, float):
-            progress = int(progress)
-        add_literal(graph, uri, LIFIA_ONTOLOGY.completionPercentage, progress)
-        add_interval(graph, uri, row["startDate"], row["endDate"])
-        add_topics(graph, uri, row["tags"], topic_uris, VIVO.hasSubjectArea)
-
-        keyword = row["keywords"]
-        if has_value(keyword) and str(keyword).strip() in topic_uris:
-            graph.add((uri, VIVO.hasSubjectArea, topic_uris[str(keyword).strip()]))
-
-        graph.add((uri, DCTERMS.identifier, Literal(row["id"])))
-
+        uri_lookup[row["id"]] = transform_thesis_row(graph, row, topic_uris)
     return uri_lookup
 
 
@@ -356,56 +383,60 @@ TYPE_TO_CLASS = {
 }
 
 
+def transform_publication_row(graph, row, topic_uris, venue_uris):
+    """Convierte una fila de Publication en su clase DBLP/BIBO correspondiente. Devuelve su URI."""
+    uri = make_uri("publicacion", row["slug"])
+
+    graph.add((uri, RDF.type, TYPE_TO_CLASS.get(row["type"], BIBO.Document)))
+    graph.add((uri, RDF.type, BIBO.Document))
+    add_literal(graph, uri, DC.title, row["title"])
+    add_literal(graph, uri, VIVO.dateIssued, row["year"])
+    add_literal(graph, uri, BIBO.uri, row["selfArchivingUrl"], as_uri=True)
+    ranking = row["ranking"]
+    if has_value(ranking) and str(ranking).strip():
+        add_literal(graph, uri, RDFS.comment, ranking)
+
+    entry_tags = get_entry_tags(row["bibtexData"])
+
+    doi = entry_tags.get("doi")
+    if doi and str(doi).strip():
+        # algunos DOI vienen con un escapado de LaTeX de más (\_ en vez de _)
+        add_literal(graph, uri, BIBO.doi, str(doi).replace("\\_", "_").strip())
+
+    pages = entry_tags.get("pages")
+    if pages:
+        parts = re.split(r"--|-", str(pages))
+        if len(parts) == 2:
+            add_literal(graph, uri, BIBO.pageStart, parts[0].strip())
+            add_literal(graph, uri, BIBO.pageEnd, parts[1].strip())
+
+    venue_name = (entry_tags.get("journal") or entry_tags.get("booktitle") or "").strip()
+    venue_slug = slugify(venue_name) if venue_name else ""
+    if venue_slug and venue_slug in venue_uris:
+        graph.add((uri, BIBO.presentedAt, venue_uris[venue_slug]))
+
+    # authors trae la lista completa de autores como un solo string
+    # (incluye coautores que no son del LIFIA), así que se vuelca como
+    # dc:creator en texto libre. La relación "real" con los Member del
+    # lab se arma aparte, a partir de la tabla _PublicationMembers
+    authors_raw = row["authors"]
+    if has_value(authors_raw) and str(authors_raw).strip():
+        for author in str(authors_raw).split(" and "):
+            author = author.strip()
+            if author:
+                graph.add((uri, DC.creator, Literal(author)))
+
+    add_topics(graph, uri, row["tags"], topic_uris, VIVO.hasSubjectArea)
+    graph.add((uri, DCTERMS.identifier, Literal(row["id"])))
+
+    return uri
+
+
 def transform_publications(graph, df_publication, topic_uris, venue_uris):
-    """Convierte cada fila de Publication en su clase DBLP/BIBO correspondiente."""
+    """Convierte todas las filas de Publication. Devuelve {id: uri}."""
     uri_lookup = {}
-
     for _, row in df_publication.iterrows():
-        uri = make_uri("publicacion", row["slug"])
-        uri_lookup[row["id"]] = uri
-
-        graph.add((uri, RDF.type, TYPE_TO_CLASS.get(row["type"], BIBO.Document)))
-        graph.add((uri, RDF.type, BIBO.Document))
-        add_literal(graph, uri, DC.title, row["title"])
-        add_literal(graph, uri, VIVO.dateIssued, row["year"])
-        add_literal(graph, uri, BIBO.uri, row["selfArchivingUrl"], as_uri=True)
-        ranking = row["ranking"]
-        if has_value(ranking) and str(ranking).strip():
-            add_literal(graph, uri, RDFS.comment, ranking)
-
-        entry_tags = get_entry_tags(row["bibtexData"])
-
-        doi = entry_tags.get("doi")
-        if doi and str(doi).strip():
-            # algunos DOI vienen con un escapado de LaTeX de más (\_ en vez de _)
-            add_literal(graph, uri, BIBO.doi, str(doi).replace("\\_", "_").strip())
-
-        pages = entry_tags.get("pages")
-        if pages:
-            parts = re.split(r"--|-", str(pages))
-            if len(parts) == 2:
-                add_literal(graph, uri, BIBO.pageStart, parts[0].strip())
-                add_literal(graph, uri, BIBO.pageEnd, parts[1].strip())
-
-        venue_name = (entry_tags.get("journal") or entry_tags.get("booktitle") or "").strip()
-        venue_slug = slugify(venue_name) if venue_name else ""
-        if venue_slug and venue_slug in venue_uris:
-            graph.add((uri, BIBO.presentedAt, venue_uris[venue_slug]))
-
-        # authors trae la lista completa de autores como un solo string
-        # (incluye coautores que no son del LIFIA), así que se vuelca como
-        # dc:creator en texto libre. La relación "real" con los Member del
-        # lab se arma aparte, a partir de la tabla _PublicationMembers
-        authors_raw = row["authors"]
-        if has_value(authors_raw) and str(authors_raw).strip():
-            for author in str(authors_raw).split(" and "):
-                author = author.strip()
-                if author:
-                    graph.add((uri, DC.creator, Literal(author)))
-
-        add_topics(graph, uri, row["tags"], topic_uris, VIVO.hasSubjectArea)
-        graph.add((uri, DCTERMS.identifier, Literal(row["id"])))
-
+        uri_lookup[row["id"]] = transform_publication_row(graph, row, topic_uris, venue_uris)
     return uri_lookup
 
 
@@ -674,28 +705,40 @@ def get_entry_tags(bibtex_data):
     return entry_tags if isinstance(entry_tags, dict) else {}
 
 
-def transform_venues(graph, df_publication):
-    """Arma bibo:Journal/Conference a partir de bibtexData, dedupeados. Devuelve {slug: uri}."""
-    venue_uris = {}
+def resolve_venue_uri(graph, entry_tags):
+    """Devuelve la URI del venue (journal/conference) de una publicación a
+    partir de su bibtexData, creando el nodo en el grafo la primera vez que se pide."""
+    journal = entry_tags.get("journal")
+    booktitle = entry_tags.get("booktitle")
+    name = (journal or booktitle or "").strip()
+    if not name:
+        return None
 
-    for _, row in df_publication.iterrows():
-        entry_tags = get_entry_tags(row["bibtexData"])
-        journal = entry_tags.get("journal")
-        booktitle = entry_tags.get("booktitle")
-        name = (journal or booktitle or "").strip()
-        if not name:
-            continue
+    slug = slugify(name)
+    if not slug:
+        return None
 
-        slug = slugify(name)
-        if not slug or slug in venue_uris:
-            continue
-
-        uri = make_uri("venue", slug)
+    uri = make_uri("venue", slug)
+    if (uri, RDFS.label, None) not in graph:
         graph.add((uri, RDF.type, BIBO.Journal if journal else BIBO.Conference))
         graph.add((uri, RDFS.label, Literal(name)))
         add_literal(graph, uri, BIBO.issn, entry_tags.get("issn"))
         add_literal(graph, uri, BIBO.isbn, entry_tags.get("isbn"))
-        venue_uris[slug] = uri
+    return uri
+
+
+def transform_venues(graph, df_publication):
+    """Arma bibo:Journal/Conference para cada publicación, dedupeados. Devuelve {slug: uri}."""
+    venue_uris = {}
+
+    for _, row in df_publication.iterrows():
+        entry_tags = get_entry_tags(row["bibtexData"])
+        uri = resolve_venue_uri(graph, entry_tags)
+        if uri is None:
+            continue
+
+        name = (entry_tags.get("journal") or entry_tags.get("booktitle") or "").strip()
+        venue_uris[slugify(name)] = uri
 
     return venue_uris
 

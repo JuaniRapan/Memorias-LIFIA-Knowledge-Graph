@@ -90,6 +90,14 @@ def _dejsonify_cell(value):
         return value
 
 
+def clean_member_na_row(row):
+    """Reemplaza el "N/A" cargado a mano en Member por None, fila por fila
+    (mismo criterio que el reemplazo vectorizado que hace extraction() sobre
+    todo el DataFrame; esta versión la usa el consumer de streaming, que
+    recibe una fila a la vez y no pasa por extraction())."""
+    return {column: (None if value == "N/A" else value) for column, value in row.items()}
+
+
 def extraction():
     """Trae las tablas principales y las de join desde Postgres y las
     deja como CSV en INTERIM_DIR, listas para que transform.py las lea."""
