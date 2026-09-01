@@ -1,5 +1,6 @@
 """Consumidor CDC: escucha los tópicos de Kafka que arma Debezium y traduce
-cada evento a triples RDF, reusando las funciones de transform.py."""
+cada evento a triples RDF, reusando las funciones de transform.py, para
+mantener sincronizado el repositorio real de GraphDB (vía SPARQL Update)."""
 
 import json
 import os
@@ -8,13 +9,17 @@ from datetime import date, datetime, timedelta, timezone
 
 from confluent_kafka import Consumer
 from dotenv import load_dotenv
-from rdflib import Graph
+from rdflib import Graph, URIRef
 
+import graphdb_client
+
+# transform.py hace "from extract import ..." asumiendo que está en el mismo
+# directorio de sys.path; al correr este script, Python solo agrega
+# src/streaming/ automáticamente, así que hay que sumar src/etl/ a mano
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "etl"))
 from extract import clean_member_na_row  # noqa: E402
 from transform import (  # noqa: E402
-    LIFIA, LIFIA_ONTOLOGY, VIVO, BIBO, CSO, DBLP, FOAF, DC, DCTERMS, SKOS,
     make_uri, slugify, get_entry_tags, load_cso_lookup,
     resolve_topic_uri, resolve_venue_uri,
     transform_member_row, transform_project_row, transform_scholarship_row,
@@ -89,13 +94,6 @@ def decode_row(payload_row, envelope_schema, field_name):
     }
 
 
-def remove_subject_triples(graph, subject):
-    """Saca del grafo todos los triples de `subject`, para poder reinsertar
-    limpio en un UPDATE o borrarlo del todo en un DELETE."""
-    for triple in list(graph.triples((subject, None, None))):
-        graph.remove(triple)
-
-
 def transform_row(graph, table, row, cso_lookup):
     """Arma los topic_uris/venue_uris que necesita la fila y llama a la
     función de transform.py correspondiente. Devuelve la URI generada."""
@@ -117,29 +115,68 @@ def transform_row(graph, table, row, cso_lookup):
     return ROW_TRANSFORMS[table](graph, row, topic_uris)
 
 
-def process_event(graph, table, msg_value, cso_lookup):
-    """Aplica un evento Debezium (create/update/delete) sobre el grafo local."""
+def _entity_triples(graph, entity_uri):
+    """Devuelve los triples "propios" de una entidad: los suyos y los de su
+    nodo de intervalo de fechas (el único sub-recurso exclusivo que arma
+    transform.py). Los temas y venues quedan afuera a
+    porque son recursos compartidos entre entidades, no hay que
+    borrarlos solo porque esta entidad dejó de referenciarlos."""
+    interval_uri = URIRef(f"{entity_uri}/intervalo")
+    return (
+        list(graph.triples((entity_uri, None, None)))
+        + list(graph.triples((interval_uri, None, None)))
+    )
+
+
+def _to_data_block(triples):
+    """Serializa triples como N-Triples (URIs completas, sin prefijos), la
+    sintaxis que aceptan los bloques INSERT DATA/DELETE DATA de SPARQL."""
+    block_graph = Graph()
+    for triple in triples:
+        block_graph.add(triple)
+    return block_graph.serialize(format="nt").strip()
+
+
+def process_event(table, msg_value, cso_lookup):
+    """Aplica un evento Debezium (create/update/delete) sobre GraphDB."""
     envelope_schema = msg_value["schema"]
     payload = msg_value["payload"]
     op = payload["op"]
     resource_type = RESOURCE_TYPE_BY_TABLE[table]
 
-    # antes de reinsertar, se borra la representación vieja del grafo. La URI
-    # se arma desde el slug de "before". Requiere que las
-    # tablas tengan REPLICA IDENTITY FULL, si no "before" solo trae el id
+    updates = []
+    old_uri = None
+    old_triples = []
+
+    # los triples viejos se recalculan corriendo el mismo transform_row sobre 
+    # "before" en un grafo descartable. Como la transformación es determinística, 
+    # da lo mismo que ya está guardado y ahorramos la consulta a GraphDB
     before = payload["before"]
     if before is not None:
         old_uri = make_uri(resource_type, before["slug"])
-        remove_subject_triples(graph, old_uri)
+        scratch = Graph()
+        transform_row(scratch, table, decode_row(before, envelope_schema, "before"), cso_lookup)
+        old_triples = _entity_triples(scratch, old_uri)
+        if old_triples:
+            updates.append(f"DELETE DATA {{\n{_to_data_block(old_triples)}\n}}")
 
     after = payload["after"]
     if after is None:
-        print(f"[{table}] DELETE -> se borró {old_uri} ({len(graph)} triples en el grafo local)")
+        if updates:
+            graphdb_client.run_update(" ;\n".join(updates))
+        print(f"[{table}] DELETE -> se borró {old_uri} (-{len(old_triples)} triples)")
         return
 
     row = decode_row(after, envelope_schema, "after")
-    new_uri = transform_row(graph, table, row, cso_lookup)
-    print(f"[{table}] {op} -> {new_uri} ({len(graph)} triples en el grafo local)")
+    scratch = Graph()
+    new_uri = transform_row(scratch, table, row, cso_lookup)
+    # acá sí van TODOS los triples que generó el evento, no solo los de la
+    # entidad: puede haber creado además un tema/venue nuevo que no existía
+    new_triples = list(scratch.triples((None, None, None)))
+    updates.append(f"INSERT DATA {{\n{_to_data_block(new_triples)}\n}}")
+
+    graphdb_client.run_update(" ;\n".join(updates))
+    print(f"[{table}] {op} -> {new_uri} (+{len(new_triples)} triples, -{len(old_triples)} triples)")
 
 
 def main():
@@ -154,19 +191,7 @@ def main():
     print("Cargando el vocabulario de CSO (para resolver temas)...")
     cso_lookup = load_cso_lookup()
 
-    graph = Graph()
-    graph.bind("lifia", LIFIA)
-    graph.bind("lifia-ontology", LIFIA_ONTOLOGY)
-    graph.bind("vivo", VIVO)
-    graph.bind("bibo", BIBO)
-    graph.bind("cso", CSO)
-    graph.bind("dblp", DBLP)
-    graph.bind("foaf", FOAF)
-    graph.bind("dc", DC)
-    graph.bind("dcterms", DCTERMS)
-    graph.bind("skos", SKOS)
-
-    print(f"Escuchando {', '.join(TOPICS)}...")
+    print(f"Escuchando {', '.join(TOPICS)}... (Ctrl+C para cortar)")
     try:
         while True:
             msg = consumer.poll(1.0)
@@ -180,14 +205,11 @@ def main():
 
             table = msg.topic().rsplit(".", 1)[-1]
             msg_value = json.loads(msg.value())
-            process_event(graph, table, msg_value, cso_lookup)
+            process_event(table, msg_value, cso_lookup)
     except KeyboardInterrupt:
-        print("\nCortando. Guardando el grafo armado hasta ahora...")
+        print("\nCortando.")
     finally:
         consumer.close()
-        os.makedirs("data/processed", exist_ok=True)
-        graph.serialize(destination="data/processed/lifia_graph_streaming.ttl", format="turtle")
-        print(f"Grafo guardado en data/processed/lifia_graph_streaming.ttl ({len(graph)} triples)")
 
 
 if __name__ == "__main__":

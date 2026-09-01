@@ -84,8 +84,20 @@ services:
       OFFSET_STORAGE_TOPIC: lifia_connect_offsets
       STATUS_STORAGE_TOPIC: lifia_connect_statuses
 
+  graphdb:
+    # 10.8.x es la última versión de GraphDB que sigue corriendo en modo Free
+    # sin pedir un archivo de licencia.
+    image: ontotext/graphdb:10.8.14
+    container_name: lifia-graphdb
+    restart: unless-stopped
+    ports:
+      - "7200:7200"
+    volumes:
+      - graphdb_data:/opt/graphdb/home
+
 volumes:
   pg_data:
   zk_data:
   zk_log:
   kafka_data:
+  graphdb_data:
