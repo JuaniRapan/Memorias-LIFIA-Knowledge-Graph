@@ -9,7 +9,7 @@ import unicodedata
 import urllib.request
 
 import pandas as pd
-from rdflib import BNode, Graph, Literal, Namespace, URIRef
+from rdflib import Graph, Literal, Namespace, URIRef
 from rdflib.namespace import FOAF, OWL, RDF, RDFS
 
 from extract import load_interim
@@ -85,10 +85,14 @@ def add_literal(graph, subject, predicate, value, as_uri=False):
 
 
 def add_interval(graph, subject, start, end):
-    """Arma un blank node vivo:DateTimeInterval con start/end."""
+    """Arma un nodo vivo:DateTimeInterval con start/end. Usa una URI propia
+    derivada de la del sujeto, para que el streaming
+    pueda referenciar siempre el mismo nodo de intervalo ante un UPDATE
+    (un blank node nuevo en cada evento no podría apuntar al que ya está
+    guardado en GraphDB)."""
     if not has_value(start) and not has_value(end):
         return
-    interval = BNode()
+    interval = URIRef(f"{subject}/intervalo")
     graph.add((subject, VIVO.dateTimeInterval, interval))
     graph.add((interval, RDF.type, VIVO.DateTimeInterval))
     if has_value(start):
