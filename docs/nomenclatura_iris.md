@@ -22,7 +22,7 @@ Prefijo a usar en Turtle/SPARQL:
 {URI_BASE}/{tipo_de_recurso}/{identificador_local}
 ```
 
-`{tipo_de_recurso}` es un sustantivo fijo, en español y en minúscula (`persona`, `publicacion`, `proyecto`, `beca`, `tesis`, `tema`, `venue`). Cumple la función de evitar que dos entidades distintas terminen compartiendo el mismo identificador local por casualidad. El `{identificador_local}` cambia según la entidad y se explica en el punto siguiente.
+`{tipo_de_recurso}` es un sustantivo fijo, en español y en minúscula (`persona`, `publicacion`, `proyecto`, `beca`, `tesis`, `tema`, `venue`, `persona-externa`). Cumple la función de evitar que dos entidades distintas terminen compartiendo el mismo identificador local por casualidad. El `{identificador_local}` cambia según la entidad y se explica en el punto siguiente.
 
 ## 3. Campo identificador
 
@@ -48,10 +48,11 @@ El costo de esta decisión es que el `slug` se puede editar desde el CMS de orig
 | Tesis (`Thesis`)                                                                | `slug`                           | `.../resource/tesis/{slug}`                                                                                                                                          |
 | Tema / Línea I+D (`tags`/`keywords`, sin tabla propia)                          | no tiene, se normaliza el string | `.../resource/tema/{tag-normalizado}`, y se usa solo si el tag no matchea con nada en CSO. Si matchea, se reusa directamente la IRI de CSO (`cso:relatedEquivalent`) |
 | Venue / Congreso / Revista (sale de `Publication.bibtexData`, sin tabla propia) | no tiene, se normaliza el nombre | `.../resource/venue/{nombre-normalizado}`                                                                                                                            |
+| Persona externa (nombres de `director`/`coDirector`/`student`/`otherAdvisors` que no matchean contra ningún `Member`, sin tabla propia) | no tiene, se normaliza el nombre | `.../resource/persona-externa/{nombre-normalizado}`, se usa solo cuando el nombre no matchea contra ningún `Member` del lab pero igual tiene forma de nombre de persona (ver mapeos_ontologicos.md) |
 
-## 5. Normalización de lo que no tiene slug propio (tema, venue)
+## 5. Normalización de lo que no tiene slug propio (tema, venue, persona externa)
 
-Los tags, los keywords y los venues que se sacan del `bibtexData` no vienen con un slug ya calculado, así que hay que armarlo a mano durante el ETL, tomando el nombre o el tag tal como está en la base y transformándolo en un texto apto para ir en una URL.
+Los tags, los keywords, los venues que se sacan del `bibtexData` y los nombres de personas externas al lab no vienen con un slug ya calculado, así que hay que armarlo a mano durante el ETL, tomando el nombre o el tag tal como está en la base y transformándolo en un texto apto para ir en una URL.
 
 Reglas que sigue esta normalización:
 
@@ -60,4 +61,4 @@ Reglas que sigue esta normalización:
 3. Los espacios y símbolos raros se reemplazan por un guion, sin guiones repetidos ni al principio o al final.
 4. Tiene que ser determinística: el mismo texto de entrada siempre da el mismo slug. Esto es clave porque si un tema aparece mencionado en varias publicaciones, tiene que colapsar siempre a la misma URI y no generar nodos duplicados en el grafo.
 
-Por ejemplo, un tag como "Web Engineering" quedaría normalizado como "web-engineering", y un venue como "ICWE 2019" quedaría como "icwe-2019".
+Por ejemplo, un tag como "Web Engineering" quedaría normalizado como "web-engineering", un venue como "ICWE 2019" quedaría como "icwe-2019", y un nombre externo como "María Pérez" quedaría como "maria-perez".
