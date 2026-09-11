@@ -185,6 +185,8 @@ def main():
         "bootstrap.servers": bootstrap_servers,
         "group.id": "lifia-stream-consumer",
         "auto.offset.reset": "earliest",
+        # tiempo en el cual se fija si un topico suscripto "inexistente" apareció
+        "topic.metadata.refresh.interval.ms": 5000,
     })
     consumer.subscribe(TOPICS)
 

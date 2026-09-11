@@ -12,10 +12,13 @@ load_dotenv()
 GRAPHDB_URL = os.getenv("GRAPHDB_URL", "http://localhost:7200")
 GRAPHDB_REPOSITORY = os.getenv("GRAPHDB_REPOSITORY", "memorias-lifia")
 TTL_PATH = "data/processed/lifia_graph.ttl"
+# jerarquía de CSO hecha a mano (subconjunto con datos que están en el grafo de LIFIA y sus superclases)
+CSO_HIERARCHY_PATH = "data/external/cso_jerarquia.ttl"
 
 
-def load():
-    with open(TTL_PATH, "rb") as f:
+def _post_turtle(path):
+    """Postea un archivo .ttl entero al repo de GraphDB."""
+    with open(path, "rb") as f:
         turtle_data = f.read()
 
     url = f"{GRAPHDB_URL}/repositories/{GRAPHDB_REPOSITORY}/statements"
@@ -26,7 +29,12 @@ def load():
         headers={"Content-Type": "text/turtle; charset=utf-8"},
     )
     with urllib.request.urlopen(request) as response:
-        print(f"Carga inicial subida a GraphDB (status {response.status})")
+        print(f"{path} subido a GraphDB (status {response.status})")
+
+
+def load():
+    _post_turtle(TTL_PATH)
+    _post_turtle(CSO_HIERARCHY_PATH)
 
 
 if __name__ == "__main__":

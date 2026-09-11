@@ -56,7 +56,6 @@ htmlcov/
 # Datos pesados / generados (dejar solo lo versionado a mano en data/raw si corresponde)
 data/interim/
 data/processed/
-data/external/
 *.csv
 *.parquet
 *.pkl
