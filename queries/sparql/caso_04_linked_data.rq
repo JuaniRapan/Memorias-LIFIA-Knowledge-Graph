@@ -1,0 +1,19 @@
+# Caso 4 - Linked Data
+#
+# QUERY: dado el ORCID público de un investigador, encontrar sus
+# publicaciones en el grafo del LIFIA sin saber de antemano cuál es su URI
+# interna.
+
+PREFIX vivo: <http://vivoweb.org/ontology/core#>
+PREFIX dc: <http://purl.org/dc/elements/1.1/>
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+
+SELECT ?titulo WHERE {
+  # owl:sameAs declara que <persona-lifia> y <orcid-externo> son la MISMA
+  # persona. "^owl:sameAs" es la propiedad invertida.
+  <https://orcid.org/0000-0001-7533-0133> ^owl:sameAs ?persona .
+
+  ?persona vivo:authorOf ?publicacion .
+  ?publicacion dc:title ?titulo .
+}
+ORDER BY ?titulo
