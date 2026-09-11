@@ -1,0 +1,41 @@
+# Jerarquía de CSO (Computer Science Ontology) para la consulta 1 de las queries.
+#
+# Esto es un subconjunto del vocabulario de CSO: son
+# los tripletas de cso:superTopicOf reales, sacados a mano de data/external/cso.csv,
+# para los temas que efectivamente aparecen en lifia_graph.ttl. Alcanza para
+# que la consulta tenga temas para recorrer.
+
+
+@prefix cso:        <http://cso.kmi.open.ac.uk/schema/cso#> .
+@prefix cso-topics: <https://cso.kmi.open.ac.uk/topics/> .
+@prefix skos:       <http://www.w3.org/2004/02/skos/core#> .
+
+cso-topics:computer_science
+    a skos:Concept ;
+    skos:prefLabel "computer science" ;
+    cso:superTopicOf cso-topics:artificial_intelligence ,
+                      cso-topics:software_engineering ,
+                      cso-topics:human_computer_interaction .
+
+cso-topics:artificial_intelligence
+    a skos:Concept ;
+    skos:prefLabel "artificial intelligence" ;
+    cso:superTopicOf cso-topics:explainable_ai ,
+                      cso-topics:human_ai_collaboration ,
+                      cso-topics:natural_language_processing .
+
+cso-topics:natural_language_processing
+    a skos:Concept ;
+    skos:prefLabel "natural language processing" ;
+    cso:superTopicOf cso-topics:named_entity_recognition .
+
+cso-topics:software_engineering
+    a skos:Concept ;
+    skos:prefLabel "software engineering" ;
+    cso:superTopicOf cso-topics:requirements_engineering ,
+                      cso-topics:web_engineering .
+
+cso-topics:semantic_web
+    a skos:Concept ;
+    skos:prefLabel "semantic web" ;
+    cso:superTopicOf cso-topics:knowledge_graphs .
