@@ -1,0 +1,26 @@
+# Caso 1 - Jerarquía
+#
+# QUERY: "Traer todas las publicaciones sobre Inteligencia Artificial",
+# entendiendo por IA también machine learning, deep learning, NLP, computer
+# vision, etc., SIN tener que enumerar a mano cada subtema.
+#
+# La jerarquía de CSO (cso:superTopicOf) tiene que estar cargada en el repo.
+# Se sube cuando se hace la carga inicial del grafo ejecutando:
+#   python src/etl/load_to_graphdb.py
+
+PREFIX cso: <http://cso.kmi.open.ac.uk/schema/cso#>
+PREFIX cso-topics: <https://cso.kmi.open.ac.uk/topics/>
+PREFIX vivo: <http://vivoweb.org/ontology/core#>
+PREFIX dc: <http://purl.org/dc/elements/1.1/>
+
+SELECT DISTINCT ?publicacion ?titulo ?tema WHERE {
+  # Asignar valor a la variable
+  BIND(cso-topics:artificial_intelligence AS ?tema_raiz)
+
+  # "superTopicOf*" recorre la jerarquía a cualquier profundidad recursivamente
+  ?tema_raiz cso:superTopicOf* ?tema .
+
+  ?publicacion vivo:hasSubjectArea ?tema ;
+               dc:title ?titulo .
+}
+ORDER BY ?titulo
