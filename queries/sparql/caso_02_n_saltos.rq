@@ -1,0 +1,25 @@
+# Caso 2 - Navegación N-saltos
+#
+# QUERY: dado un investigador del LIFIA, ¿quiénes son sus colegas de colegas
+# con los que todavía NO publicó directamente?
+
+PREFIX vivo: <http://vivoweb.org/ontology/core#>
+PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+
+SELECT DISTINCT ?colega ?nombre WHERE {
+  BIND(<http://lifia.info.unlp.edu.ar/resource/persona/diego-torres> AS ?persona)
+
+  # coautor a 2 saltos: persona -> publicación -> coautor_directo -> otra publicación -> colega
+  # cada "authorOf/^authorOf" es un salto de coautoría (salgo por una publicación, entro por otro autor)
+  # el ^ es para obtener quien tiene authorOf hacia este nodo (cuando se hace ese nodo es la publicación)
+  ?persona vivo:authorOf/^vivo:authorOf/vivo:authorOf/^vivo:authorOf ?colega .
+
+  # descarto a la persona misma
+  FILTER(?colega != ?persona)
+
+  # y sacamos a los que YA son coautores directos
+  FILTER NOT EXISTS { ?persona vivo:authorOf/^vivo:authorOf ?colega }
+
+  ?colega foaf:name ?nombre .
+}
+ORDER BY ?nombre

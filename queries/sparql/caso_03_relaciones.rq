@@ -1,0 +1,31 @@
+# Caso 3 - Integración de relaciones explícitas y menciones textuales resueltas
+#
+# QUERY: traer toda la producción de una persona del LIFIA (publicaciones y
+# tesis), sin que importe si esa relación viene de una tabla de join de
+# verdad o de un campo de texto libre (director/coDirector/student) resuelto
+# contra Member por nombre.
+
+PREFIX vivo: <http://vivoweb.org/ontology/core#>
+PREFIX dc: <http://purl.org/dc/elements/1.1/>
+
+SELECT DISTINCT ?trabajo ?titulo ?tipo WHERE {
+  BIND(<http://lifia.info.unlp.edu.ar/resource/persona/diego-torres> AS ?persona)
+
+  {
+    # publicaciones: sale de _PublicationMembers (tabla de join)
+    ?persona vivo:authorOf ?trabajo .
+    BIND("publicacion" AS ?tipo)
+  } UNION {
+    # tesis conectadas por tabla de join (_ThesisMembers)
+    ?persona vivo:relatedBy ?trabajo .
+    BIND("tesis (tabla de join)" AS ?tipo)
+  } UNION {
+    # tesis conectadas por texto libre (director/coDirector/student/otherAdvisors),
+    # ya resuelto contra Member por el ETL con el matching de nombres
+    ?trabajo vivo:relates ?persona .
+    BIND("tesis (texto)" AS ?tipo)
+  }
+
+  ?trabajo dc:title ?titulo .
+}
+ORDER BY ?tipo ?titulo
