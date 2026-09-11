@@ -20,6 +20,8 @@ SELECT DISTINCT ?colega ?nombre WHERE {
   # y sacamos a los que YA son coautores directos
   FILTER NOT EXISTS { ?persona vivo:authorOf/^vivo:authorOf ?colega }
 
-  ?colega foaf:name ?nombre .
+  ?colega foaf:firstName ?nombre_pila ;
+          foaf:lastName ?apellido .
+  BIND(CONCAT(?nombre_pila, " ", ?apellido) AS ?nombre)
 }
 ORDER BY ?nombre
