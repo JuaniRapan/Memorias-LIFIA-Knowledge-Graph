@@ -61,6 +61,13 @@ def make_uri(tipo_recurso, identificador_local):
     return LIFIA[f"{tipo_recurso}/{identificador_local}"]
 
 
+def uri_slug(uri):
+    """Sacar el {identificador_local} de una URI ya armada con make_uri (el
+    último segmento), para poder combinarlo al armar la URI de un nodo
+    intermedio (autoría, rol) sin tener que volver a pasar el slug a mano."""
+    return str(uri).rsplit("/", 1)[-1]
+
+
 URL_RE = re.compile(r"^https?://\S+$")
 
 
@@ -239,7 +246,7 @@ def transform_member_row(graph, row, topic_uris):
     add_literal(graph, uri, FOAF.phone, row["phone"])
     add_literal(graph, uri, FOAF.homepage, row["webPage"], as_uri=True)
     add_literal(graph, uri, FOAF.depiction, row["avatarUrl"], as_uri=True)
-    add_literal(graph, uri, VIVO.highestDegree, row["highestDegree"])
+    add_literal(graph, uri, LIFIA_ONTOLOGY.highestDegree, row["highestDegree"])
     add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtLab"])
     add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtUnlp"])
     add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtCIC"])
@@ -278,13 +285,13 @@ def transform_project_row(graph, row, topic_uris):
     """Convierte una fila de Project en un vivo:ResearchProject. Devuelve su URI."""
     uri = make_uri("proyecto", row["slug"])
 
-    graph.add((uri, RDF.type, VIVO.ResearchProject))
+    graph.add((uri, RDF.type, VIVO.Project))
     add_literal(graph, uri, RDFS.label, row["title"])
     add_literal(graph, uri, VIVO.localAwardId, row["code"])
     add_literal(graph, uri, RDFS.comment, row["fundingAgency"])
     add_literal(graph, uri, VIVO.totalAwardAmount, row["amount"])
     add_literal(graph, uri, VIVO.description, row["summary"])
-    add_literal(graph, uri, VIVO.webpage, row["website"], as_uri=True)
+    add_literal(graph, uri, FOAF.homepage, row["website"], as_uri=True)
     add_literal(graph, uri, RDFS.comment, row["responsibleGroup"])
     add_interval(graph, uri, row["startDate"], row["endDate"])
 
@@ -342,7 +349,6 @@ def transform_thesis_row(graph, row, topic_uris):
     uri = make_uri("tesis", row["slug"])
 
     graph.add((uri, RDF.type, BIBO.Thesis))
-    graph.add((uri, RDF.type, VIVO.Thesis))
     add_literal(graph, uri, DC.title, row["title"])
     add_literal(graph, uri, BIBO.degree, LEVEL_TO_DEGREE.get(row["level"], row["level"]))
     add_literal(graph, uri, RDFS.comment, row["career"])
@@ -450,10 +456,8 @@ def transform_publications(graph, df_publication, topic_uris, venue_uris):
 # ---------------------------------------------------------------------------
 
 # tabla de join -> propiedad RDF a usar entre A y B, según las FK reales
-# del dump (A y B siempre son el id de dos de las 5 entidades principales)
 JOIN_SPEC = {
     "_ProjectMembers": VIVO.contributingRole,
-    "_PublicationMembers": VIVO.authorOf,
     "_ThesisMembers": VIVO.relatedBy,
     "_ScholarshipMembers": VIVO.relatedBy,
     "_ProjectPublications": VIVO.relatedBy,
@@ -474,6 +478,29 @@ def transform_relations(graph, dataframes, uri_lookup):
             uri_b = uri_lookup.get(row["B"])
             if uri_a is not None and uri_b is not None:
                 graph.add((uri_a, predicate, uri_b))
+
+
+def add_authorship(graph, member_uri, publication_uri):
+    """Arma el patrón de autoría real de VIVO para un (Member, Publication)"""
+    autoria_uri = make_uri("autoria", f"{uri_slug(member_uri)}--{uri_slug(publication_uri)}")
+
+    graph.add((autoria_uri, RDF.type, VIVO.Authorship))
+    graph.add((publication_uri, VIVO.relatedBy, autoria_uri))
+    graph.add((member_uri, VIVO.relatedBy, autoria_uri))
+    graph.add((autoria_uri, VIVO.relates, publication_uri))
+    graph.add((autoria_uri, VIVO.relates, member_uri))
+
+    return autoria_uri
+
+
+def transform_authorships(graph, df_publication_members, uri_lookup):
+    """Recorre _PublicationMembers (A = Member.id, B = Publication.id) y arma
+    el nodo vivo:Authorship correspondiente a cada fila."""
+    for _, row in df_publication_members.iterrows():
+        member_uri = uri_lookup.get(row["A"])
+        publication_uri = uri_lookup.get(row["B"])
+        if member_uri is not None and publication_uri is not None:
+            add_authorship(graph, member_uri, publication_uri)
 
 
 # ---------------------------------------------------------------------------
@@ -588,18 +615,38 @@ def resolve_person(name, name_index, threshold=0.85):
     return None
 
 
-# (tabla, columna, propiedad RDF) para cada campo de texto libre que hay
-# que resolver
+def _add_direct_relation(predicate):
+    """Devuelve una función que agrega subject -predicate-> person directo
+    (el caso general de TEXT_RELATIONS, sin nodo intermedio)."""
+    def apply_relation(graph, subject_uri, person_uri):
+        graph.add((subject_uri, predicate, person_uri))
+    return apply_relation
+
+
+def add_pi_role(graph, project_uri, person_uri):
+    """Arma el patrón de rol real de VIVO para un director/coDirector de
+    Project."""
+    rol_uri = make_uri("rol-pi", f"{uri_slug(person_uri)}--{uri_slug(project_uri)}")
+
+    graph.add((rol_uri, RDF.type, VIVO.PrincipalInvestigatorRole))
+    graph.add((person_uri, VIVO.relatedBy, rol_uri))
+    graph.add((rol_uri, VIVO.relates, person_uri))
+    graph.add((rol_uri, VIVO.roleContributesTo, project_uri))
+    graph.add((project_uri, VIVO.contributingRole, rol_uri))
+
+
+# (tabla, columna, función que agrega la relación ya resuelta) para cada
+# campo de texto libre que hay que resolver contra Member
 TEXT_RELATIONS = [
-    ("Project", "director", VIVO.hasPrincipalInvestigatorRole),
-    ("Project", "coDirector", VIVO.hasPrincipalInvestigatorRole),
-    ("Scholarship", "director", VIVO.relates),
-    ("Scholarship", "coDirector", VIVO.relates),
-    ("Scholarship", "student", VIVO.relates),
-    ("Thesis", "director", VIVO.relates),
-    ("Thesis", "coDirector", VIVO.relates),
-    ("Thesis", "student", VIVO.relates),
-    ("Thesis", "otherAdvisors", VIVO.relates),
+    ("Project", "director", add_pi_role),
+    ("Project", "coDirector", add_pi_role),
+    ("Scholarship", "director", _add_direct_relation(VIVO.relates)),
+    ("Scholarship", "coDirector", _add_direct_relation(VIVO.relates)),
+    ("Scholarship", "student", _add_direct_relation(VIVO.relates)),
+    ("Thesis", "director", _add_direct_relation(VIVO.relates)),
+    ("Thesis", "coDirector", _add_direct_relation(VIVO.relates)),
+    ("Thesis", "student", _add_direct_relation(VIVO.relates)),
+    ("Thesis", "otherAdvisors", _add_direct_relation(VIVO.relates)),
 ]
 
 # un nombre de persona real, en este dataset, nunca tiene más de 4 palabras
@@ -659,7 +706,7 @@ def transform_text_relations(graph, dataframes, uri_lookup, name_index, external
     tiene forma de nombre de persona)."""
     log = []
 
-    for table, column, predicate in TEXT_RELATIONS:
+    for table, column, apply_relation in TEXT_RELATIONS:
         for _, row in dataframes[table].iterrows():
             subject_uri = uri_lookup.get(row["id"])
             raw_value = row[column]
@@ -679,7 +726,7 @@ def transform_text_relations(graph, dataframes, uri_lookup, name_index, external
             for name in names:
                 person_uri = whole_value_uri if whole_value_uri is not None else resolve_person(name, name_index)
                 if person_uri is not None:
-                    graph.add((subject_uri, predicate, person_uri))
+                    apply_relation(graph, subject_uri, person_uri)
                     continue
 
                 if not looks_like_a_name(name):
@@ -688,7 +735,7 @@ def transform_text_relations(graph, dataframes, uri_lookup, name_index, external
 
                 external_uri = get_or_create_external_person(graph, name, external_uris)
                 if external_uri is not None:
-                    graph.add((subject_uri, predicate, external_uri))
+                    apply_relation(graph, subject_uri, external_uri)
                     log.append((table, column, name, "creado como persona externa (no es Member)"))
 
     return log
@@ -780,6 +827,7 @@ def transformation(dataframes=None):
     uri_lookup.update(transform_theses(graph, dataframes["Thesis"], topic_uris))
 
     transform_relations(graph, dataframes, uri_lookup)
+    transform_authorships(graph, dataframes["_PublicationMembers"], uri_lookup)
 
     name_index = build_member_name_index(dataframes["Member"], uri_lookup)
     external_uris = {}

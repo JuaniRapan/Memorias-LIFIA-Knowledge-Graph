@@ -15,24 +15,32 @@ TTL_PATH = "data/processed/lifia_graph.ttl"
 # jerarquía de CSO hecha a mano (subconjunto con datos que están en el grafo de LIFIA y sus superclases)
 CSO_HIERARCHY_PATH = "data/external/cso_jerarquia.ttl"
 
+VIVO_ONTOLOGY_PATH = "ontologias/vivo.owl"
 
-def _post_turtle(path):
-    """Postea un archivo .ttl entero al repo de GraphDB."""
+
+def _post_statements(path, content_type):
+    """Postea un archivo RDF entero (Turtle o RDF/XML) al repo de GraphDB."""
     with open(path, "rb") as f:
-        turtle_data = f.read()
+        rdf_data = f.read()
 
     url = f"{GRAPHDB_URL}/repositories/{GRAPHDB_REPOSITORY}/statements"
     request = urllib.request.Request(
         url,
-        data=turtle_data,
+        data=rdf_data,
         method="POST",
-        headers={"Content-Type": "text/turtle; charset=utf-8"},
+        headers={"Content-Type": f"{content_type}; charset=utf-8"},
     )
     with urllib.request.urlopen(request) as response:
         print(f"{path} subido a GraphDB (status {response.status})")
 
 
+def _post_turtle(path):
+    """Postea un archivo .ttl entero al repo de GraphDB."""
+    _post_statements(path, "text/turtle")
+
+
 def load():
+    _post_statements(VIVO_ONTOLOGY_PATH, "application/rdf+xml")
     _post_turtle(TTL_PATH)
     _post_turtle(CSO_HIERARCHY_PATH)
 

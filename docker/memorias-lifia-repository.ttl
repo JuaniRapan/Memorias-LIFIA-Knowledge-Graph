@@ -1,0 +1,33 @@
+# Config de repositorio de GraphDB (formato RDF4J estándar que entiende
+# también GraphDB), con el ruleset de razonamiento OWL2-RL optimizado.
+#
+# Se usa con docker/create-repository.sh, antes de correr load_to_graphdb.py.
+
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix rep: <http://www.openrdf.org/config/repository#> .
+@prefix sr: <http://www.openrdf.org/config/repository/sail#> .
+@prefix sail: <http://www.openrdf.org/config/sail#> .
+@prefix graphdb: <http://www.ontotext.com/config/graphdb#> .
+
+[] a rep:Repository ;
+    rep:repositoryID "memorias-lifia" ;
+    rdfs:label "Memorias LIFIA Knowledge Graph" ;
+    rep:repositoryImpl [
+        rep:repositoryType "graphdb:SailRepository" ;
+        sr:sailImpl [
+            sail:sailType "graphdb:Sail" ;
+            graphdb:ruleset "owl2-rl-optimized" ;
+            graphdb:base-URL "http://lifia.info.unlp.edu.ar/resource/" ;
+            graphdb:defaultNS "" ;
+            graphdb:entity-index-size "10000000" ;
+            graphdb:enable-context-index "false" ;
+            graphdb:enablePredicateList "true" ;
+            graphdb:in-memory-literal-properties "true" ;
+            graphdb:enable-literal-index "true" ;
+            graphdb:check-for-inconsistencies "false" ;
+            graphdb:disable-sameAs "false" ;
+            graphdb:query-timeout "0" ;
+            graphdb:read-only "false" ;
+            graphdb:throw-QueryEvaluationException-on-timeout "false" ;
+        ]
+    ] .
