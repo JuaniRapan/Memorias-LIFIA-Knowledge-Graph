@@ -6,19 +6,51 @@
 PREFIX vivo: <http://vivoweb.org/ontology/core#>
 PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 
+# NOTA: vivo:authorOf no existe en la ontología real de VIVO (se verificó
+# contra ontologias/vivo.owl). El patrón real de autoría usa un nodo
+# intermedio vivo:Authorship por cada (persona, publicación):
+#   persona -vivo:relatedBy-> autoria -vivo:relates-> publicación
+
 SELECT DISTINCT ?colega ?nombre WHERE {
-  BIND(<http://lifia.info.unlp.edu.ar/resource/persona/diego-torres> AS ?persona)
+  BIND(<http://lifia.info.unlp.edu.ar/resource/persona/martin-urbieta> AS ?persona)
 
-  # coautor a 2 saltos: persona -> publicación -> coautor_directo -> otra publicación -> colega
-  # cada "authorOf/^authorOf" es un salto de coautoría (salgo por una publicación, entro por otro autor)
-  # el ^ es para obtener quien tiene authorOf hacia este nodo (cuando se hace ese nodo es la publicación)
-  ?persona vivo:authorOf/^vivo:authorOf/vivo:authorOf/^vivo:authorOf ?colega .
+  {
+    SELECT DISTINCT ?persona ?colega WHERE {
+      BIND(<http://lifia.info.unlp.edu.ar/resource/persona/martin-urbieta> AS ?persona)
 
-  # descarto a la persona misma
-  FILTER(?colega != ?persona)
+      # 1er salto: persona -> autoria1 -> publicación -> autoria2 -> coautor_directo
+      ?persona vivo:relatedBy ?autoria1 .
+      ?autoria1 a vivo:Authorship ;
+                vivo:relates ?publicacion1 .
+      ?publicacion1 vivo:relatedBy ?autoria2 .
+      ?autoria2 a vivo:Authorship ;
+                vivo:relates ?directo .
 
-  # y sacamos a los que YA son coautores directos
-  FILTER NOT EXISTS { ?persona vivo:authorOf/^vivo:authorOf ?colega }
+      # 2do salto: coautor_directo -> autoria3 -> otra publicación -> autoria4 -> colega
+      ?directo vivo:relatedBy ?autoria3 .
+      ?autoria3 a vivo:Authorship ;
+                vivo:relates ?publicacion2 .
+      ?publicacion2 vivo:relatedBy ?autoria4 .
+      ?autoria4 a vivo:Authorship ;
+                vivo:relates ?colega .
+
+      FILTER(?colega != ?persona)
+      FILTER(STRSTARTS(STR(?colega), "http://lifia.info.unlp.edu.ar/resource/persona/"))
+    }
+  }
+
+  # coautores directos (1 solo salto), calculado una sola vez y no por fila
+  MINUS {
+    SELECT DISTINCT ?persona ?colega WHERE {
+      BIND(<http://lifia.info.unlp.edu.ar/resource/persona/martin-urbieta> AS ?persona)
+
+      ?persona vivo:relatedBy ?a1 .
+      ?a1 a vivo:Authorship ; vivo:relates ?pubX .
+      ?pubX vivo:relatedBy ?a2 .
+      ?a2 a vivo:Authorship ; vivo:relates ?colega .
+      FILTER(STRSTARTS(STR(?colega), "http://lifia.info.unlp.edu.ar/resource/persona/"))
+    }
+  }
 
   ?colega foaf:firstName ?nombre_pila ;
           foaf:lastName ?apellido .

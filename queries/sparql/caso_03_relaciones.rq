@@ -12,8 +12,11 @@ SELECT DISTINCT ?trabajo ?titulo ?tipo WHERE {
   BIND(<http://lifia.info.unlp.edu.ar/resource/persona/diego-torres> AS ?persona)
 
   {
-    # publicaciones: sale de _PublicationMembers (tabla de join)
-    ?persona vivo:authorOf ?trabajo .
+    # publicaciones: sale de _PublicationMembers (tabla de join), a través
+    # del nodo vivo:Authorship
+    ?persona vivo:relatedBy ?autoria .
+    ?autoria a vivo:Authorship ;
+             vivo:relates ?trabajo .
     BIND("publicacion" AS ?tipo)
   } UNION {
     # tesis conectadas por tabla de join (_ThesisMembers)
