@@ -165,6 +165,48 @@ class TestLooksLikeAName(unittest.TestCase):
         )
 
 
+class TestAuthorshipYPiRole(unittest.TestCase):
+    """vivo:authorOf y vivo:hasPrincipalInvestigatorRole no existen en la
+    ontología real de VIVO (verificado contra ontologias/vivo.owl); estos
+    tests validan el patrón de nodo intermedio que los reemplaza."""
+
+    def test_add_authorship_arma_el_nodo_con_las_cuatro_aristas(self):
+        graph = Graph()
+        member_uri = transform.make_uri("persona", "ana-lopez")
+        pub_uri = transform.make_uri("publicacion", "paper-1")
+
+        autoria_uri = transform.add_authorship(graph, member_uri, pub_uri)
+
+        self.assertEqual(autoria_uri, transform.make_uri("autoria", "ana-lopez--paper-1"))
+        self.assertIn((autoria_uri, RDF.type, transform.VIVO.Authorship), graph)
+        self.assertIn((member_uri, transform.VIVO.relatedBy, autoria_uri), graph)
+        self.assertIn((pub_uri, transform.VIVO.relatedBy, autoria_uri), graph)
+        self.assertIn((autoria_uri, transform.VIVO.relates, member_uri), graph)
+        self.assertIn((autoria_uri, transform.VIVO.relates, pub_uri), graph)
+
+    def test_transform_authorships_ignora_ids_sin_uri(self):
+        graph = Graph()
+        df = pd.DataFrame([{"A": "id-desconocido", "B": "id-desconocido-2"}])
+
+        transform.transform_authorships(graph, df, uri_lookup={})
+
+        self.assertEqual(len(graph), 0)
+
+    def test_add_pi_role_arma_el_nodo_con_relatedby_y_contributingrole(self):
+        graph = Graph()
+        person_uri = transform.make_uri("persona", "diego-torres")
+        project_uri = transform.make_uri("proyecto", "proyecto-x")
+
+        transform.add_pi_role(graph, project_uri, person_uri)
+
+        rol_uri = transform.make_uri("rol-pi", "diego-torres--proyecto-x")
+        self.assertIn((rol_uri, RDF.type, transform.VIVO.PrincipalInvestigatorRole), graph)
+        self.assertIn((person_uri, transform.VIVO.relatedBy, rol_uri), graph)
+        self.assertIn((rol_uri, transform.VIVO.relates, person_uri), graph)
+        self.assertIn((rol_uri, transform.VIVO.roleContributesTo, project_uri), graph)
+        self.assertIn((project_uri, transform.VIVO.contributingRole, rol_uri), graph)
+
+
 # ---------------------------------------------------------------------------
 # Grupo 2: el grafo ya generado (necesita extract.py + transform.py corridos)
 # ---------------------------------------------------------------------------
@@ -194,9 +236,9 @@ class TestGeneratedGraph(unittest.TestCase):
         # una sola URI y este conteo daría distinto
         casos = [
             (transform.VIVO.FacultyMember, "Member"),
-            (transform.VIVO.ResearchProject, "Project"),
+            (transform.VIVO.Project, "Project"),
             (transform.VIVO.Grant, "Scholarship"),
-            (transform.VIVO.Thesis, "Thesis"),
+            (BIBO.Thesis, "Thesis"),
             (BIBO.Document, "Publication"),
         ]
         for rdf_class, tabla in casos:
@@ -257,7 +299,7 @@ class TestGeneratedGraph(unittest.TestCase):
         # (0-100) estaba yendo como rdfs:comment en vez de una propiedad numérica
         from rdflib import Literal
 
-        for s in self.graph.subjects(RDF.type, transform.VIVO.Thesis):
+        for s in self.graph.subjects(RDF.type, BIBO.Thesis):
             for comment in self.graph.objects(s, RDFS.comment):
                 if isinstance(comment, Literal) and comment.datatype is not None:
                     self.assertNotIn(
@@ -271,6 +313,25 @@ class TestGeneratedGraph(unittest.TestCase):
         for v in valores:
             entero = int(v)
             self.assertTrue(0 <= entero <= 100, f"completionPercentage fuera de rango: {v!r}")
+
+    def test_no_quedan_terminos_vivo_inventados(self):
+        # regresión: estos 6 términos no existen en ontologias/vivo.owl (se
+        # verificó contra el archivo real), no deberían volver a aparecer
+        inventados = [
+            transform.VIVO.authorOf,
+            transform.VIVO.hasPrincipalInvestigatorRole,
+            transform.VIVO.ResearchProject,
+            transform.VIVO.Thesis,
+            transform.VIVO.highestDegree,
+            transform.VIVO.webpage,
+        ]
+        for termino in inventados:
+            with self.subTest(termino=termino):
+                usado = (
+                    (None, termino, None) in self.graph
+                    or (None, RDF.type, termino) in self.graph
+                )
+                self.assertFalse(usado, f"{termino} no existe en VIVO real y no debería usarse")
 
 
 if __name__ == "__main__":
