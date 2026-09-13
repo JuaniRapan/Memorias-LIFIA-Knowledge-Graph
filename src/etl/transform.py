@@ -136,6 +136,17 @@ CSO_CSV_URL = "https://cso.kmi.open.ac.uk/download/version-3.5/cso_v3.5.csv"
 CSO_CACHE_PATH = "data/external/cso.csv"
 
 
+def split_keywords(raw_value):
+    """Separa Thesis.keywords (texto libre, a diferencia de `tags` que ya
+    viene como array de Postgres) en keywords individuales. En el dataset
+    real cada valor usa un solo separador, nunca los dos mezclados: coma
+    (la mayoría) o punto y coma. Si no aparece ninguno de los
+    dos, es una sola keyword suelta."""
+    raw_value = str(raw_value)
+    separador = ";" if ";" in raw_value else ","
+    return [k.strip() for k in raw_value.split(separador) if k.strip()]
+
+
 def normalize_topic_label(texto):
     """Normaliza un label para matchear contra CSO (minúscula, guion a espacio)."""
     # hace falta aparte de slugify() porque CSO tiene labels con guion y sin
@@ -208,9 +219,9 @@ def transform_topics(graph, dataframes):
             if isinstance(tags, (list, tuple)):
                 all_tags.update(str(t).strip() for t in tags if str(t).strip())
 
-    for keyword in dataframes["Thesis"]["keywords"]:
-        if has_value(keyword) and str(keyword).strip():
-            all_tags.add(str(keyword).strip())
+    for keywords in dataframes["Thesis"]["keywords"]:
+        if has_value(keywords) and str(keywords).strip():
+            all_tags.update(split_keywords(keywords))
 
     cso_lookup = load_cso_lookup()
 
@@ -365,9 +376,11 @@ def transform_thesis_row(graph, row, topic_uris):
     add_interval(graph, uri, row["startDate"], row["endDate"])
     add_topics(graph, uri, row["tags"], topic_uris, VIVO.hasSubjectArea)
 
-    keyword = row["keywords"]
-    if has_value(keyword) and str(keyword).strip() in topic_uris:
-        graph.add((uri, VIVO.hasSubjectArea, topic_uris[str(keyword).strip()]))
+    keywords = row["keywords"]
+    if has_value(keywords) and str(keywords).strip():
+        for keyword in split_keywords(keywords):
+            if keyword in topic_uris:
+                graph.add((uri, VIVO.hasSubjectArea, topic_uris[keyword]))
 
     graph.add((uri, DCTERMS.identifier, Literal(row["id"])))
 
