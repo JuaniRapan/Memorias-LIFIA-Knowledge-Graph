@@ -151,6 +151,31 @@ class TestSplitNames(unittest.TestCase):
         )
 
 
+class TestSplitKeywords(unittest.TestCase):
+    """Thesis.keywords, a diferencia de `tags`, no es un array de Postgres
+    sino un string con varias keywords sueltas adentro (bug encontrado en
+    revisión: antes se guardaba entero como un solo tag)."""
+
+    def test_separa_por_coma(self):
+        self.assertEqual(
+            transform.split_keywords("machine learning, inteligencia artificial"),
+            ["machine learning", "inteligencia artificial"],
+        )
+
+    def test_separa_por_punto_y_coma_cuando_las_keywords_ya_tienen_coma_adentro(self):
+        # caso real
+        self.assertEqual(
+            transform.split_keywords(" ADN ; Docker ; ingeniería de datos ; Machine Learning"),
+            ["ADN", "Docker", "ingeniería de datos", "Machine Learning"],
+        )
+
+    def test_una_sola_keyword_sin_separador(self):
+        self.assertEqual(
+            transform.split_keywords("Desing Thinking "),
+            ["Desing Thinking"],
+        )
+
+
 class TestLooksLikeAName(unittest.TestCase):
     def test_nombre_largo_valido(self):
         self.assertTrue(transform.looks_like_a_name("Federico Ricardo Mozzon Corporaal"))
@@ -313,6 +338,19 @@ class TestGeneratedGraph(unittest.TestCase):
         for v in valores:
             entero = int(v)
             self.assertTrue(0 <= entero <= 100, f"completionPercentage fuera de rango: {v!r}")
+
+    def test_keywords_de_thesis_se_separan_individualmente(self):
+        # regresión: antes, un Thesis.keywords con varias keywords separadas
+        # por coma quedaba como un solo cso:Topic con todo junto
+        machine_learning = transform.CSO_TOPICS["machine_learning"]
+        tesis_con_ml = [
+            s for s in self.graph.subjects(transform.VIVO.hasSubjectArea, machine_learning)
+            if (s, RDF.type, BIBO.Thesis) in self.graph
+        ]
+        self.assertGreater(
+            len(tesis_con_ml), 0,
+            "Ninguna tesis quedó conectada al cso:Topic real de machine learning",
+        )
 
     def test_no_quedan_terminos_vivo_inventados(self):
         # regresión: estos 6 términos no existen en ontologias/vivo.owl (se
