@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from confluent_kafka import Consumer
 from dotenv import load_dotenv
-from rdflib import Graph, URIRef
+from rdflib import Graph, Literal, URIRef
 
 import graphdb_client
 
@@ -24,6 +24,7 @@ from transform import (  # noqa: E402
     resolve_topic_uri, resolve_venue_uri,
     transform_member_row, transform_project_row, transform_scholarship_row,
     transform_thesis_row, transform_publication_row,
+    JOIN_SPEC, add_authorship,
 )
 
 load_dotenv()
@@ -47,8 +48,16 @@ ROW_TRANSFORMS = {
     "Thesis": transform_thesis_row,
 }
 
-# Para las tablas de relaciones voy a necesitar consultar en el grafo el id:uri
-TOPICS = [f"lifia.public.{tabla}" for tabla in RESOURCE_TYPE_BY_TABLE]
+# tablas de join: JOIN_SPEC (de transform.py) ya tiene 8 de las 9 con su
+# propiedad directa; _PublicationMembers queda afuera de JOIN_SPEC porque
+# arma un nodo vivo:Authorship en vez de una propiedad directa (ver
+# add_authorship en transform.py)
+JOIN_TABLES = list(JOIN_SPEC) + ["_PublicationMembers"]
+
+TOPICS = [
+    f"lifia.public.{tabla}"
+    for tabla in list(RESOURCE_TYPE_BY_TABLE) + JOIN_TABLES
+]
 
 EPOCH = date(1970, 1, 1)
 
@@ -137,6 +146,123 @@ def _to_data_block(triples):
     return block_graph.serialize(format="nt").strip()
 
 
+def _binding_to_term(binding):
+    """Convierte un binding del JSON de resultados SPARQL (uri o literal) a
+    su término real de rdflib."""
+    if binding["type"] == "uri":
+        return URIRef(binding["value"])
+    return Literal(binding["value"], datatype=binding.get("datatype"), lang=binding.get("xml:lang") or None)
+
+
+def resolve_uri_by_id(entity_id):
+    """Busca en GraphDB la URI cuyo dcterms:identifier sea `entity_id`. Hace
+    falta para las tablas de join: solo traen el id (UUID) de cada lado, no
+    el slug con el que se arma la URI, y acá (a diferencia de la carga
+    batch) no hay un uri_lookup aramdo en memoria."""
+    query = f'SELECT ?uri WHERE {{ ?uri <http://purl.org/dc/terms/identifier> "{entity_id}" }} LIMIT 1'
+    bindings = graphdb_client.run_query(query)
+    if not bindings:
+        return None
+    return URIRef(bindings[0]["uri"]["value"])
+
+
+def _resolve_join_pair(row):
+    """Resuelve las columnas A/B de una fila de tabla de join a sus URIs
+    reales en GraphDB. None si no se pudo resolver algún lado (por ejemplo,
+    si el evento de la relación llega antes que el de la entidad)."""
+    uri_a = resolve_uri_by_id(row["A"])
+    uri_b = resolve_uri_by_id(row["B"])
+    if uri_a is None or uri_b is None:
+        return None
+    return uri_a, uri_b
+
+
+def _add_join_triples(graph, table, uri_a, uri_b):
+    """Agrega el triple (o el nodo de vivo:Authorship) correspondiente a una
+    fila de tabla de join, con la misma lógica que usa la carga batch."""
+    if table == "_PublicationMembers":
+        add_authorship(graph, uri_a, uri_b)
+    else:
+        graph.add((uri_a, JOIN_SPEC[table], uri_b))
+
+
+def process_join_event(table, msg_value):
+    """Aplica un evento Debezium de una tabla de join (alta/baja de relación
+    N:M, ej. agregar un integrante a un proyecto) sobre GraphDB."""
+    payload = msg_value["payload"]
+    op = payload["op"]
+
+    updates = []
+    old_pair = None
+    old_triples = []
+
+    before = payload["before"]
+    if before is not None:
+        old_pair = _resolve_join_pair(before)
+        if old_pair is not None:
+            scratch = Graph()
+            _add_join_triples(scratch, table, *old_pair)
+            old_triples = list(scratch.triples((None, None, None)))
+            if old_triples:
+                updates.append(f"DELETE DATA {{\n{_to_data_block(old_triples)}\n}}")
+
+    after = payload["after"]
+    if after is None:
+        if updates:
+            graphdb_client.run_update(" ;\n".join(updates))
+        print(f"[{table}] DELETE -> {old_pair} (-{len(old_triples)} triples)")
+        return
+
+    new_pair = _resolve_join_pair(after)
+    if new_pair is None:
+        print(
+            f"[{table}] {op}: no se pudo resolver A={after['A']} o B={after['B']} "
+            "contra GraphDB (¿todavía no llegó el evento de esa entidad?), se ignora"
+        )
+        return
+
+    scratch = Graph()
+    _add_join_triples(scratch, table, *new_pair)
+    new_triples = list(scratch.triples((None, None, None)))
+    updates.append(f"INSERT DATA {{\n{_to_data_block(new_triples)}\n}}")
+
+    graphdb_client.run_update(" ;\n".join(updates))
+    print(f"[{table}] {op} -> {new_pair} (+{len(new_triples)} triples, -{len(old_triples)} triples)")
+
+
+def _rename_uri_updates(old_uri, new_uri, triples_ya_manejados):
+    """Ante un UPDATE que cambia el slug (y por lo tanto la URI) de una
+    entidad, busca en GraphDB si había relaciones cargadas por OTRO evento
+    que todavía apunten a la URI vieja, y arma los bloques para migrarlas a
+    la URI nueva."""
+    ya_manejados = set(triples_ya_manejados)
+
+    salientes = graphdb_client.run_query(f"SELECT ?p ?o WHERE {{ <{old_uri}> ?p ?o }}")
+    entrantes = graphdb_client.run_query(f"SELECT ?s ?p WHERE {{ ?s ?p <{old_uri}> }}")
+
+    viejos = Graph()
+    nuevos = Graph()
+    for binding in salientes:
+        p, o = URIRef(binding["p"]["value"]), _binding_to_term(binding["o"])
+        if (old_uri, p, o) in ya_manejados:
+            continue
+        viejos.add((old_uri, p, o))
+        nuevos.add((new_uri, p, o))
+    for binding in entrantes:
+        s, p = URIRef(binding["s"]["value"]), URIRef(binding["p"]["value"])
+        viejos.add((s, p, old_uri))
+        nuevos.add((s, p, new_uri))
+
+    if len(viejos) == 0:
+        return []
+
+    print(f"[rename] {old_uri} -> {new_uri}: migrando {len(viejos)} triples de otras tablas")
+    return [
+        f"DELETE DATA {{\n{_to_data_block(list(viejos))}\n}}",
+        f"INSERT DATA {{\n{_to_data_block(list(nuevos))}\n}}",
+    ]
+
+
 def process_event(table, msg_value, cso_lookup):
     """Aplica un evento Debezium (create/update/delete) sobre GraphDB."""
     envelope_schema = msg_value["schema"]
@@ -175,6 +301,12 @@ def process_event(table, msg_value, cso_lookup):
     new_triples = list(scratch.triples((None, None, None)))
     updates.append(f"INSERT DATA {{\n{_to_data_block(new_triples)}\n}}")
 
+    # si además de los datos propios cambió el slug (osea la URI), hay que
+    # migrar las relaciones que ya estuvieran cargadas por otro evento apuntando a la
+    # URI vieja, para que no queden relacionadas a un recurso que ya no existe
+    if old_uri is not None and old_uri != new_uri:
+        updates.extend(_rename_uri_updates(old_uri, new_uri, old_triples))
+
     graphdb_client.run_update(" ;\n".join(updates))
     print(f"[{table}] {op} -> {new_uri} (+{len(new_triples)} triples, -{len(old_triples)} triples)")
 
@@ -207,7 +339,10 @@ def main():
 
             table = msg.topic().rsplit(".", 1)[-1]
             msg_value = json.loads(msg.value())
-            process_event(table, msg_value, cso_lookup)
+            if table in JOIN_TABLES:
+                process_join_event(table, msg_value)
+            else:
+                process_event(table, msg_value, cso_lookup)
     except KeyboardInterrupt:
         print("\nCortando.")
     finally:
