@@ -22,7 +22,7 @@ Prefijo a usar en Turtle/SPARQL:
 {URI_BASE}/{tipo_de_recurso}/{identificador_local}
 ```
 
-`{tipo_de_recurso}` es un sustantivo fijo, en español y en minúscula (`persona`, `publicacion`, `proyecto`, `beca`, `tesis`, `tema`, `venue`, `persona-externa`). Cumple la función de evitar que dos entidades distintas terminen compartiendo el mismo identificador local por casualidad. El `{identificador_local}` cambia según la entidad y se explica en el punto siguiente.
+`{tipo_de_recurso}` es un sustantivo fijo, en español y en minúscula (`persona`, `publicacion`, `proyecto`, `beca`, `tesis`, `tema`, `venue`, `persona-externa`, `autoria`, `rol-pi`). Cumple la función de evitar que dos entidades distintas terminen compartiendo el mismo identificador local por casualidad. El `{identificador_local}` cambia según la entidad y se explica en el punto siguiente.
 
 ## 3. Campo identificador
 
@@ -49,6 +49,8 @@ El costo de esta decisión es que el `slug` se puede editar desde el CMS de orig
 | Tema / Línea I+D (`tags`/`keywords`, sin tabla propia)                          | no tiene, se normaliza el string | `.../resource/tema/{tag-normalizado}`, y se usa solo si el tag no matchea con nada en CSO. Si matchea, se reusa directamente la IRI de CSO (`cso:relatedEquivalent`) |
 | Venue / Congreso / Revista (sale de `Publication.bibtexData`, sin tabla propia) | no tiene, se normaliza el nombre | `.../resource/venue/{nombre-normalizado}`                                                                                                                            |
 | Persona externa (nombres de `director`/`coDirector`/`student`/`otherAdvisors` que no matchean contra ningún `Member`, sin tabla propia) | no tiene, se normaliza el nombre | `.../resource/persona-externa/{nombre-normalizado}`, se usa solo cuando el nombre no matchea contra ningún `Member` del lab pero igual tiene forma de nombre de persona (ver mapeos_ontologicos.md) |
+| Autoría (nodo `vivo:Authorship`, uno por fila de `_PublicationMembers`, sin tabla propia) | no tiene, se combinan los dos slugs ya armados | `.../resource/autoria/{slug-persona}--{slug-publicacion}`, determinística porque los dos slugs de entrada ya lo son (ver mapeos_ontologicos.md, nota sobre autoría) |
+| Rol de Director/Codirector de `Project` (nodo `vivo:PrincipalInvestigatorRole`, uno por persona resuelta en `director`/`coDirector`, sin tabla propia) | no tiene, se combinan los dos slugs ya armados | `.../resource/rol-pi/{slug-persona}--{slug-proyecto}` (ver mapeos_ontologicos.md, nota sobre el rol de PI) |
 
 ## 5. Normalización de lo que no tiene slug propio (tema, venue, persona externa)
 
