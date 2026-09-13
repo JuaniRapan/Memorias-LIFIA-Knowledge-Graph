@@ -25,6 +25,15 @@ class FakeResponse:
 
 class LoadTest(unittest.TestCase):
     def test_postea_el_tbox_de_vivo_el_grafo_y_la_jerarquia_de_cso(self):
+        # a diferencia de ontologias/vivo.owl y cso_jerarquia.ttl (versionados
+        # en git), lifia_graph.ttl lo genera transform.py y no está en un
+        # checkout limpio
+        if not os.path.exists(ltg.TTL_PATH):
+            raise unittest.SkipTest(
+                f"No encontré {ltg.TTL_PATH}. Corré 'python src/etl/extract.py "
+                "&& python src/etl/transform.py' primero (necesita la base levantada)."
+            )
+
         posted_urls = []
         posted_paths = []
 
