@@ -279,12 +279,16 @@ def process_event(table, msg_value, cso_lookup):
     # da lo mismo que ya está guardado y ahorramos la consulta a GraphDB
     before = payload["before"]
     if before is not None:
-        old_uri = make_uri(resource_type, before["slug"])
-        scratch = Graph()
-        transform_row(scratch, table, decode_row(before, envelope_schema, "before"), cso_lookup)
-        old_triples = _entity_triples(scratch, old_uri)
-        if old_triples:
-            updates.append(f"DELETE DATA {{\n{_to_data_block(old_triples)}\n}}")
+        slug_anterior = before.get("slug")
+        if slug_anterior is None:
+            print(f"[{table}] {op}: el evento llegó sin slug en 'before', no se puede borrar el triple viejo")
+        else:
+            old_uri = make_uri(resource_type, slug_anterior)
+            scratch = Graph()
+            transform_row(scratch, table, decode_row(before, envelope_schema, "before"), cso_lookup)
+            old_triples = _entity_triples(scratch, old_uri)
+            if old_triples:
+                updates.append(f"DELETE DATA {{\n{_to_data_block(old_triples)}\n}}")
 
     after = payload["after"]
     if after is None:
@@ -339,10 +343,15 @@ def main():
 
             table = msg.topic().rsplit(".", 1)[-1]
             msg_value = json.loads(msg.value())
-            if table in JOIN_TABLES:
-                process_join_event(table, msg_value)
-            else:
-                process_event(table, msg_value, cso_lookup)
+            try:
+                if table in JOIN_TABLES:
+                    process_join_event(table, msg_value)
+                else:
+                    process_event(table, msg_value, cso_lookup)
+            except Exception as error:
+                # si GraphDB está caído o tira un 5xx después de agotar los
+                # reintentos del cliente, se loguea y se sigue
+                print(f"[{table}] no se pudo procesar el evento, se sigue con el próximo: {error}")
     except KeyboardInterrupt:
         print("\nCortando.")
     finally:

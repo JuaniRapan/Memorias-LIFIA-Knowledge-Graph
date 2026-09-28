@@ -2,6 +2,8 @@
 
 import json
 import os
+import time
+import urllib.error
 import urllib.request
 
 from dotenv import load_dotenv
@@ -10,6 +12,28 @@ load_dotenv()
 
 GRAPHDB_URL = os.getenv("GRAPHDB_URL", "http://localhost:7200")
 GRAPHDB_REPOSITORY = os.getenv("GRAPHDB_REPOSITORY", "memorias-lifia")
+
+# cantidad de reintentos ante una caída transitoria y segundos de espera
+# base para el backoff exponencial (2s, 4s, 8s)
+MAX_REINTENTOS = 3
+ESPERA_BASE_SEGUNDOS = 2
+
+
+def _abrir_con_reintentos(request):
+    """Manda el request a GraphDB reintentando con backoff exponencial ante
+    timeouts, desconexiones o errores."""
+    ultimo_error = None
+    for intento in range(MAX_REINTENTOS):
+        try:
+            return urllib.request.urlopen(request, timeout=10)
+        except urllib.error.HTTPError as error:
+            if error.code < 500:
+                raise
+            ultimo_error = error
+        except urllib.error.URLError as error:
+            ultimo_error = error
+        time.sleep(ESPERA_BASE_SEGUNDOS * (2 ** intento))
+    raise ultimo_error
 
 
 def run_update(sparql_update):
@@ -21,7 +45,7 @@ def run_update(sparql_update):
         method="POST",
         headers={"Content-Type": "application/sparql-update; charset=utf-8"},
     )
-    with urllib.request.urlopen(request) as response:
+    with _abrir_con_reintentos(request) as response:
         return response.status
 
 
@@ -38,5 +62,5 @@ def run_query(sparql_select):
             "Accept": "application/sparql-results+json",
         },
     )
-    with urllib.request.urlopen(request) as response:
+    with _abrir_con_reintentos(request) as response:
         return json.load(response)["results"]["bindings"]

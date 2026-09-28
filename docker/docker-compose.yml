@@ -32,6 +32,10 @@ services:
       - pg_data:/var/lib/postgresql/data
       - ../data/raw/new_memorias_para_kgsw.dump:/docker-entrypoint-initdb.d/new_memorias_para_kgsw.dump:ro
       - ./postgres-init/01-restore-dump.sh:/docker-entrypoint-initdb.d/01-restore-dump.sh:ro
+      # se corre después del restore (por el prefijo 02-) para dejar todas
+      # las tablas en REPLICA IDENTITY FULL antes de que Debezium arranque
+      # a leer el WAL; sin esto un DELETE no trae el slug en el "before"
+      - ./postgres-init/02-replica-identity.sql:/docker-entrypoint-initdb.d/02-replica-identity.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-lifia_db}"]
       interval: 5s
