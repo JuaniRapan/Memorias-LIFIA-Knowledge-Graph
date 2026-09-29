@@ -47,9 +47,10 @@ Los campos que contienen URLs se guardan como IRI **solo si tienen forma de URL*
 | `webPage`                                                               | `foaf:homepage`                         |
 | `avatarUrl`                                                             | `foaf:depiction`                        |
 | `highestDegree`                                                         | `lifia-ontology:highestDegree`          |
-| `positionAtLab`, `positionAtUnlp`, `positionAtCIC`, `positionAtCONICET` | `vivo:hrJobTitle`                       |
+| `positionAtLab`, `positionAtUnlp`, `positionAtCIC`, `positionAtCONICET` | `lifia-ontology:jobTitle`               |
 | `category`, `sicadiCategory`, `affiliations`                            | `rdfs:comment`                          |
-| `shortCvIn{Spanish,English}`, `interestsIn{Spanish,English}`            | `vivo:overview`                         |
+| `shortCvIn{Spanish,English}`                                            | `lifia-ontology:shortCv` (`@es`/`@en`)  |
+| `interestsIn{Spanish,English}`                                          | `lifia-ontology:researchInterests` (`@es`/`@en`) |
 | `orcid`                                                                 | `owl:sameAs` → `https://orcid.org/{id}` |
 | `dblpProfile`                                                           | `owl:sameAs` → URL de DBLP              |
 | `googleResearchProfile`, `researchGateProfile`                          | `rdfs:seeAlso`                          |
@@ -59,7 +60,7 @@ Los campos que contienen URLs se guardan como IRI **solo si tienen forma de URL*
 | Columna SQL                        | Propiedad RDF                                                   |
 | ---------------------------------- | --------------------------------------------------------------- |
 | `title`                            | `dc:title`                                                      |
-| `year`                             | `vivo:dateIssued`                                               |
+| `year`                             | `vivo:dateIssued` → nodo `vivo:DateTimeValue` (ver §4)          |
 | `selfArchivingUrl`                 | `bibo:uri`                                                      |
 | `ranking`                          | `rdfs:comment`                                                  |
 | `authors`                          | `dc:creator` (texto libre, split por " and "; incluye externos) |
@@ -118,10 +119,10 @@ El triple es siempre `A → B`, donde `A` es el modelo que va primero alfabétic
 
 | Tabla                  | Triple generado                                                   |
 | ---------------------- | ----------------------------------------------------------------- |
-| `_ProjectMembers`      | Member `vivo:contributingRole` Project                            |
+| `_ProjectMembers`      | Member `vivo:relatedBy` **MemberRole** `vivo:roleContributesTo` Project (ver §4) |
 | `_PublicationMembers`  | Member `vivo:relatedBy` **Authorship** `vivo:relates` Publication |
-| `_ScholarshipMembers`  | Member `vivo:relatedBy` Scholarship                               |
-| `_ThesisMembers`       | Member `vivo:relatedBy` Thesis                                    |
+| `_ScholarshipMembers`  | Member `vivo:relatedBy` **Relationship** `vivo:relates` Scholarship (ver §4) |
+| `_ThesisMembers`       | Member `vivo:relatedBy` **Relationship** `vivo:relates` Thesis (ver §4) |
 | `_ProjectPublications` | Project `vivo:relatedBy` Publication                              |
 | `_ProjectScholarships` | Project `vivo:relatedBy` Scholarship                              |
 | `_ProjectTheses`       | Project `vivo:relatedBy` Thesis                                   |
@@ -136,6 +137,9 @@ El triple es siempre `A → B`, donde `A` es el modelo que va primero alfabétic
 
 - **Autoría:** un nodo `vivo:Authorship` por cada par `(Member, Publication)`. `Persona ⇄ Authorship ⇄ Publicación` con `vivo:relatedBy` (hacia el nodo) y `vivo:relates` (desde el nodo).
 - **Director de proyecto:** un nodo `vivo:PrincipalInvestigatorRole` por director/codirector. Persona ⇄ Rol con `vivo:relatedBy` / `vivo:relates`. Rol ⇄ Proyecto con `vivo:roleContributesTo` / `vivo:contributingRole`. En Scholarship y Thesis se usa `vivo:relates` directo, porque VIVO no define un rol específico para ese caso.
+- **Integrante de proyecto (`_ProjectMembers`):** mismo patrón que el director, pero con un nodo `vivo:MemberRole` en vez de `vivo:PrincipalInvestigatorRole`.
+- **Integrante de tesis/beca (`_ThesisMembers`, `_ScholarshipMembers`):** un nodo `vivo:Relationship` genérico por cada par, con `vivo:relatedBy` / `vivo:relates` de los dos lados. Hace falta el nodo (y no un `vivo:relatedBy` directo Member→Thesis/Scholarship) porque `foaf:Agent` restringe todo lo que se le cuelgue de `vivo:relatedBy` a ser un `vivo:Relationship`; sin el nodo intermedio, el razonador clasificaría mal la tesis o la beca.
+- **`vivo:dateIssued` (Publication):** un nodo `vivo:DateTimeValue` propio con `vivo:dateTime` (1ro de enero del año, único dato que trae el dataset), igual que se hace con `vivo:dateTimeInterval`.
 
 ### Resolución de nombres en texto libre
 
@@ -157,5 +161,5 @@ Todos los casos quedan registrados en `data/processed/relaciones_sin_resolver.cs
 - **`authors` vs. `_PublicationMembers`:** `dc:creator` guarda todos los autores como texto (también los externos). `Authorship` enlaza solo a los autores internos.
 - **Topics:** cada tag o keyword se normaliza y se compara contra `data/external/cso.csv`. `Thesis.keywords` es un string, no un array: `split_keywords()` decide si separar por `,` o `;`.
 - **Venues:** se deduplican por slug del nombre.
-- **Namespaces propios:** `lifia:` (`http://lifia.info.unlp.edu.ar/resource/`) es solo para instancias. `lifia-ontology:` es para propiedades sin equivalente externo, que son `completionPercentage` y `highestDegree`. Para `highestDegree`, VIVO pediría un nodo `AcademicDegree` por cada grado.
+- **Namespaces propios:** `lifia:` (`http://lifia.info.unlp.edu.ar/resource/`) es solo para instancias. `lifia-ontology:` es para propiedades sin equivalente externo que respete el dominio/rango real de VIVO: `completionPercentage`, `highestDegree`, `jobTitle` (VIVO pediría un nodo `Position` por cargo), `shortCv` y `researchInterests` (VIVO tiene `overview`, pero es `owl:FunctionalProperty` y acá hay hasta 4 valores por persona).
 - **Fuera del mapeo:** el enum `Role` (permisos del CMS) y `createdAt`, `updatedAt` y `featured` (filtrados en `extract.py`, ver `NON_DOMAIN_FIELDS`).

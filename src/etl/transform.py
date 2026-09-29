@@ -10,7 +10,7 @@ import urllib.request
 
 import pandas as pd
 from rdflib import Graph, Literal, Namespace, URIRef
-from rdflib.namespace import FOAF, OWL, RDF, RDFS
+from rdflib.namespace import FOAF, OWL, RDF, RDFS, XSD
 
 from extract import load_interim
 
@@ -71,8 +71,9 @@ def uri_slug(uri):
 URL_RE = re.compile(r"^https?://\S+$")
 
 
-def add_literal(graph, subject, predicate, value, as_uri=False):
-    """Agrega (subject, predicate, value) solo si value tiene contenido real."""
+def add_literal(graph, subject, predicate, value, as_uri=False, lang=None):
+    """Agrega (subject, predicate, value) solo si value tiene contenido real.
+    `lang` es opcional, para los campos que vienen duplicados en ES/EN."""
     if not has_value(value):
         return
     if isinstance(value, str):
@@ -86,7 +87,7 @@ def add_literal(graph, subject, predicate, value, as_uri=False):
         if as_uri and URL_RE.match(value):
             graph.add((subject, predicate, URIRef(value)))
         else:
-            graph.add((subject, predicate, Literal(value)))
+            graph.add((subject, predicate, Literal(value, lang=lang)))
     else:
         graph.add((subject, predicate, Literal(value)))
 
@@ -106,6 +107,22 @@ def add_interval(graph, subject, start, end):
         graph.add((interval, VIVO.start, Literal(start)))
     if has_value(end):
         graph.add((interval, VIVO.end, Literal(end)))
+
+
+def add_date_issued(graph, subject, year):
+    """Arma el nodo vivo:DateTimeValue que pide vivo:dateIssued como rango
+    (un Literal(year) suelto ahí clasificaría mal el año bajo OWL2-RL). El
+    dataset solo trae el año, así que se arma el 1ro de enero de ese año."""
+    if not has_value(year):
+        return
+    try:
+        anio = int(year)
+    except (TypeError, ValueError):
+        return
+    fecha_uri = URIRef(f"{subject}/fecha-publicacion")
+    graph.add((subject, VIVO.dateIssued, fecha_uri))
+    graph.add((fecha_uri, RDF.type, VIVO.DateTimeValue))
+    graph.add((fecha_uri, VIVO.dateTime, Literal(f"{anio:04d}-01-01T00:00:00", datatype=XSD.dateTime)))
 
 
 def clean_orcid(value):
@@ -258,16 +275,21 @@ def transform_member_row(graph, row, topic_uris):
     add_literal(graph, uri, FOAF.homepage, row["webPage"], as_uri=True)
     add_literal(graph, uri, FOAF.depiction, row["avatarUrl"], as_uri=True)
     add_literal(graph, uri, LIFIA_ONTOLOGY.highestDegree, row["highestDegree"])
-    add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtLab"])
-    add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtUnlp"])
-    add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtCIC"])
-    add_literal(graph, uri, VIVO.hrJobTitle, row["positionAtCONICET"])
+    # vivo:hrJobTitle tiene como dominio formal vivo:Position, no una
+    # persona: usar predicado propio del lab para no corromper la inferencia
+    add_literal(graph, uri, LIFIA_ONTOLOGY.jobTitle, row["positionAtLab"])
+    add_literal(graph, uri, LIFIA_ONTOLOGY.jobTitle, row["positionAtUnlp"])
+    add_literal(graph, uri, LIFIA_ONTOLOGY.jobTitle, row["positionAtCIC"])
+    add_literal(graph, uri, LIFIA_ONTOLOGY.jobTitle, row["positionAtCONICET"])
     add_literal(graph, uri, RDFS.comment, row["category"])
     add_literal(graph, uri, RDFS.comment, row["sicadiCategory"])
-    add_literal(graph, uri, VIVO.overview, row["shortCvInSpanish"])
-    add_literal(graph, uri, VIVO.overview, row["shortCvInEnglish"])
-    add_literal(graph, uri, VIVO.overview, row["interestsInSpanish"])
-    add_literal(graph, uri, VIVO.overview, row["interestsInEnglish"])
+    # vivo:overview es owl:FunctionalProperty (1 solo valor permitido) y acá
+    # hay hasta 4 literales (CV e intereses en ES/EN): se migran a predicados
+    # propios del lab, no funcionales, tageados por idioma
+    add_literal(graph, uri, LIFIA_ONTOLOGY.shortCv, row["shortCvInSpanish"], lang="es")
+    add_literal(graph, uri, LIFIA_ONTOLOGY.shortCv, row["shortCvInEnglish"], lang="en")
+    add_literal(graph, uri, LIFIA_ONTOLOGY.researchInterests, row["interestsInSpanish"], lang="es")
+    add_literal(graph, uri, LIFIA_ONTOLOGY.researchInterests, row["interestsInEnglish"], lang="en")
     add_literal(graph, uri, RDFS.comment, row["affiliations"])
     add_interval(graph, uri, row["startDate"], row["endDate"])
 
@@ -413,7 +435,7 @@ def transform_publication_row(graph, row, topic_uris, venue_uris):
     graph.add((uri, RDF.type, TYPE_TO_CLASS.get(row["type"], BIBO.Document)))
     graph.add((uri, RDF.type, BIBO.Document))
     add_literal(graph, uri, DC.title, row["title"])
-    add_literal(graph, uri, VIVO.dateIssued, row["year"])
+    add_date_issued(graph, uri, row["year"])
     add_literal(graph, uri, BIBO.uri, row["selfArchivingUrl"], as_uri=True)
     ranking = row["ranking"]
     if has_value(ranking) and str(ranking).strip():
@@ -468,11 +490,13 @@ def transform_publications(graph, df_publication, topic_uris, venue_uris):
 # extract.JOIN_TABLES)
 # ---------------------------------------------------------------------------
 
-# tabla de join -> propiedad RDF a usar entre A y B, según las FK reales
+# tabla de join -> propiedad RDF a usar directo entre A y B, según las FK
+# reales. _ProjectMembers, _ThesisMembers y _ScholarshipMembers NO están acá:
+# tienen un Member (foaf:Agent) del lado A, y foaf:Agent restringe a
+# vivo:Relationship todo lo que cuelgue de vivo:relatedBy, así que
+# clasificaría mal al Project/Thesis/Scholarship del lado B (ver
+# REIFIED_JOIN_SPEC más abajo)
 JOIN_SPEC = {
-    "_ProjectMembers": VIVO.contributingRole,
-    "_ThesisMembers": VIVO.relatedBy,
-    "_ScholarshipMembers": VIVO.relatedBy,
     "_ProjectPublications": VIVO.relatedBy,
     "_ProjectScholarships": VIVO.relatedBy,
     "_ProjectTheses": VIVO.relatedBy,
@@ -481,8 +505,47 @@ JOIN_SPEC = {
 }
 
 
+def add_project_member_role(graph, member_uri, project_uri):
+    """Arma el mismo patrón de rol de VIVO que add_pi_role, pero con
+    vivo:MemberRole: para un integrante de Project que no es director."""
+    rol_uri = make_uri("rol-miembro", f"{uri_slug(member_uri)}--{uri_slug(project_uri)}")
+
+    graph.add((rol_uri, RDF.type, VIVO.MemberRole))
+    graph.add((member_uri, VIVO.relatedBy, rol_uri))
+    graph.add((rol_uri, VIVO.relates, member_uri))
+    graph.add((rol_uri, VIVO.roleContributesTo, project_uri))
+    graph.add((project_uri, VIVO.contributingRole, rol_uri))
+
+    return rol_uri
+
+
+def add_membership_relationship(graph, member_uri, target_uri):
+    """Arma un nodo vivo:Relationship genérico entre un Member y la tesis o
+    beca en la que participa (sin un rol específico definido en VIVO para
+    ese caso), en vez de vivo:relatedBy directo sobre el Member."""
+    relacion_uri = make_uri("relacion", f"{uri_slug(member_uri)}--{uri_slug(target_uri)}")
+
+    graph.add((relacion_uri, RDF.type, VIVO.Relationship))
+    graph.add((member_uri, VIVO.relatedBy, relacion_uri))
+    graph.add((target_uri, VIVO.relatedBy, relacion_uri))
+    graph.add((relacion_uri, VIVO.relates, member_uri))
+    graph.add((relacion_uri, VIVO.relates, target_uri))
+
+    return relacion_uri
+
+
+# ídem JOIN_SPEC, pero para las tablas de join que necesitan nodo reificado
+# en vez de una propiedad directa (ver comentario de JOIN_SPEC)
+REIFIED_JOIN_SPEC = {
+    "_ProjectMembers": add_project_member_role,
+    "_ThesisMembers": add_membership_relationship,
+    "_ScholarshipMembers": add_membership_relationship,
+}
+
+
 def transform_relations(graph, dataframes, uri_lookup):
-    """Agrega A -predicate-> B por cada fila de las tablas de join, según JOIN_SPEC."""
+    """Agrega A-B por cada fila de las tablas de join: propiedad directa
+    para las de JOIN_SPEC, nodo reificado para las de REIFIED_JOIN_SPEC."""
     # las tablas de join solo traen el id (UUID) de cada lado, no el slug
     # con el que se arma la URI, por eso hace falta uri_lookup (id -> uri)
     for join_table, predicate in JOIN_SPEC.items():
@@ -491,6 +554,13 @@ def transform_relations(graph, dataframes, uri_lookup):
             uri_b = uri_lookup.get(row["B"])
             if uri_a is not None and uri_b is not None:
                 graph.add((uri_a, predicate, uri_b))
+
+    for join_table, add_relation in REIFIED_JOIN_SPEC.items():
+        for _, row in dataframes[join_table].iterrows():
+            uri_a = uri_lookup.get(row["A"])
+            uri_b = uri_lookup.get(row["B"])
+            if uri_a is not None and uri_b is not None:
+                add_relation(graph, uri_a, uri_b)
 
 
 def add_authorship(graph, member_uri, publication_uri):

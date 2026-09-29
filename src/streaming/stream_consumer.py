@@ -24,7 +24,7 @@ from transform import (  # noqa: E402
     resolve_topic_uri, resolve_venue_uri,
     transform_member_row, transform_project_row, transform_scholarship_row,
     transform_thesis_row, transform_publication_row,
-    JOIN_SPEC, add_authorship,
+    JOIN_SPEC, REIFIED_JOIN_SPEC, add_authorship,
 )
 
 load_dotenv()
@@ -48,11 +48,11 @@ ROW_TRANSFORMS = {
     "Thesis": transform_thesis_row,
 }
 
-# tablas de join: JOIN_SPEC (de transform.py) ya tiene 8 de las 9 con su
-# propiedad directa; _PublicationMembers queda afuera de JOIN_SPEC porque
-# arma un nodo vivo:Authorship en vez de una propiedad directa (ver
-# add_authorship en transform.py)
-JOIN_TABLES = list(JOIN_SPEC) + ["_PublicationMembers"]
+# tablas de join: JOIN_SPEC (de transform.py) tiene 5 de las 9 con su
+# propiedad directa; las otras 4 arman un nodo reificado en vez de una
+# propiedad directa (REIFIED_JOIN_SPEC para 3, más _PublicationMembers que
+# usa add_authorship y por eso ni siquiera está en un dict de transform.py)
+JOIN_TABLES = list(JOIN_SPEC) + list(REIFIED_JOIN_SPEC) + ["_PublicationMembers"]
 
 TOPICS = [
     f"lifia.public.{tabla}"
@@ -125,16 +125,19 @@ def transform_row(graph, table, row, cso_lookup):
 
 
 def _entity_triples(graph, entity_uri):
-    """Devuelve los triples "propios" de una entidad: los suyos y los de su
-    nodo de intervalo de fechas (el único sub-recurso exclusivo que arma
-    transform.py). Los temas y venues quedan afuera a
+    """Devuelve los triples "propios" de una entidad: los suyos y los de sus
+    sub-recursos exclusivos (nodo de intervalo de fechas, nodo de
+    vivo:dateIssued en Publication). Los temas y venues quedan afuera
     porque son recursos compartidos entre entidades, no hay que
     borrarlos solo porque esta entidad dejó de referenciarlos."""
-    interval_uri = URIRef(f"{entity_uri}/intervalo")
-    return (
-        list(graph.triples((entity_uri, None, None)))
-        + list(graph.triples((interval_uri, None, None)))
-    )
+    sub_recursos = [
+        URIRef(f"{entity_uri}/intervalo"),
+        URIRef(f"{entity_uri}/fecha-publicacion"),
+    ]
+    triples = list(graph.triples((entity_uri, None, None)))
+    for sub_uri in sub_recursos:
+        triples += list(graph.triples((sub_uri, None, None)))
+    return triples
 
 
 def _to_data_block(triples):
@@ -178,12 +181,20 @@ def _resolve_join_pair(row):
 
 
 def _add_join_triples(graph, table, uri_a, uri_b):
-    """Agrega el triple (o el nodo de vivo:Authorship) correspondiente a una
-    fila de tabla de join, con la misma lógica que usa la carga batch."""
+    """Agrega el triple (o el nodo reificado) correspondiente a una fila de
+    tabla de join, con la misma lógica que usa la carga batch."""
     if table == "_PublicationMembers":
         add_authorship(graph, uri_a, uri_b)
+    elif table in REIFIED_JOIN_SPEC:
+        REIFIED_JOIN_SPEC[table](graph, uri_a, uri_b)
     else:
         graph.add((uri_a, JOIN_SPEC[table], uri_b))
+
+
+class UnresolvedJoinError(Exception):
+    """Todavía no se puede resolver alguna punta de una fila de tabla de
+    join (ej: llegó la relación pero no la entidad). No es un error de
+    verdad, pero tiene que frenar el commit del offset para reintentar."""
 
 
 def process_join_event(table, msg_value):
@@ -215,11 +226,13 @@ def process_join_event(table, msg_value):
 
     new_pair = _resolve_join_pair(after)
     if new_pair is None:
-        print(
-            f"[{table}] {op}: no se pudo resolver A={after['A']} o B={after['B']} "
-            "contra GraphDB (¿todavía no llegó el evento de esa entidad?), se ignora"
+        # antes se ignoraba este caso con un print y un return; con
+        # enable.auto.commit=False eso ya no alcanza, porque hace falta que
+        # el offset NO se commitee para que el evento se reprocese después
+        raise UnresolvedJoinError(
+            f"{op}: no se pudo resolver A={after['A']} o B={after['B']} contra GraphDB "
+            "(¿todavía no llegó el evento de esa entidad?)"
         )
-        return
 
     scratch = Graph()
     _add_join_triples(scratch, table, *new_pair)
@@ -321,6 +334,10 @@ def main():
         "bootstrap.servers": bootstrap_servers,
         "group.id": "lifia-stream-consumer",
         "auto.offset.reset": "earliest",
+        # se commitea el offset a mano, solo después de impactar en GraphDB
+        # (ver el final del loop de consumo); si no, un mensaje que falla
+        # a mitad de camino se pierde igual porque Kafka ya lo dio por leído
+        "enable.auto.commit": False,
         # tiempo en el cual se fija si un topico suscripto "inexistente" apareció
         "topic.metadata.refresh.interval.ms": 5000,
     })
@@ -349,9 +366,14 @@ def main():
                 else:
                     process_event(table, msg_value, cso_lookup)
             except Exception as error:
-                # si GraphDB está caído o tira un 5xx después de agotar los
-                # reintentos del cliente, se loguea y se sigue
-                print(f"[{table}] no se pudo procesar el evento, se sigue con el próximo: {error}")
+                # si GraphDB está caído, tira un 5xx después de agotar los
+                # reintentos del cliente, o la relación llegó antes que su
+                # entidad (UnresolvedJoinError), NO se commitea el offset:
+                # así, cuando el consumidor vuelva a levantar, Kafka le
+                # vuelve a mandar este mismo mensaje en vez de perderlo
+                print(f"[{table}] no se pudo procesar el evento, no se commitea el offset: {error}")
+            else:
+                consumer.commit(msg)
     except KeyboardInterrupt:
         print("\nCortando.")
     finally:
