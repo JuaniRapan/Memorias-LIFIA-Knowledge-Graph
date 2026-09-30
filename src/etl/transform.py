@@ -623,7 +623,9 @@ def build_member_name_index(df_member, uri_lookup):
             index[key] = uri
 
     for _, row in df_member.iterrows():
-        full_name = normalize_name(f"{row['firstName']} {row['lastName']}")
+        first_name = row["firstName"] if has_value(row["firstName"]) else ""
+        last_name = row["lastName"] if has_value(row["lastName"]) else ""
+        full_name = normalize_name(f"{first_name} {last_name}")
         if not full_name:
             continue
         uri = uri_lookup[row["id"]]
@@ -643,7 +645,7 @@ def build_member_name_index(df_member, uri_lookup):
     for key in ambiguous:
         del index[key]
 
-    return index, wordsets
+    return index, wordsets, tuple(index)
 
 
 def _name_candidates(normalized):
@@ -660,7 +662,7 @@ def _name_candidates(normalized):
 def resolve_exact(name, name_index):
     """Busca `name` como UNA sola persona, probando el orden en que vino,
     invertido, y sin nombres del medio."""
-    index, _ = name_index
+    index, _, _ = name_index
     normalized = normalize_name(name)
     if not normalized:
         return None
@@ -676,7 +678,7 @@ def resolve_person(name, name_index, threshold=0.85):
     en cualquier orden, entre las palabras del texto pero solo si matchea
     un único Member); y si tampoco, fuzzy
     con difflib. None si no hay nada confiable."""
-    index, wordsets = name_index
+    index, wordsets, fuzzy_index = name_index
     person_uri = resolve_exact(name, name_index)
     if person_uri is not None:
         return person_uri
@@ -691,7 +693,7 @@ def resolve_person(name, name_index, threshold=0.85):
         return subset_matches.pop()
 
     for candidate in _name_candidates(normalized):
-        matches = difflib.get_close_matches(candidate, index.keys(), n=1, cutoff=threshold)
+        matches = difflib.get_close_matches(candidate, fuzzy_index, n=1, cutoff=threshold)
         if matches:
             return index[matches[0]]
 

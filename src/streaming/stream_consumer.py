@@ -329,7 +329,7 @@ def process_event(table, msg_value, cso_lookup):
 
 
 def main():
-    bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092")
     consumer = Consumer({
         "bootstrap.servers": bootstrap_servers,
         "group.id": "lifia-stream-consumer",
