@@ -30,7 +30,7 @@ En este caso se muestra tanto la reutilización de vocabularios publicados (Link
 
 **La consulta**: Dado un investigador del LIFIA, ¿quiénes son sus colegas de colegas con los que todavía NO publicó directamente?
 Podría servir para recomendaciones de posibles colaboraciones dentro del centro.
-La fuente de "quién escribió qué" en ambos modelos es la relación autor-publicación. En Postgres es la tabla de join \_PublicationMembers, en el grafo este dato quedó como vivo:authorOf entre el nodo de la persona y el nodo de la investigación.
+La fuente de "quién escribió qué" en ambos modelos es la relación autor-publicación. En Postgres es la tabla de join \_PublicationMembers, en el grafo cada fila de esa tabla se representa como un nodo intermedio `vivo:Authorship`, que la persona y la publicación alcanzan con `vivo:relatedBy` y que apunta a las dos con `vivo:relates` (`persona → autoría → publicación`). Por eso cada "salto" autor-coautor en SPARQL recorre dos aristas en vez de una.
 
 ### Queries
 

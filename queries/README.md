@@ -16,4 +16,4 @@ queries/
 
 - **SPARQL:** GraphDB Workbench (`http://localhost:7200`), repositorio
   `memorias-lifia`, solapa _SPARQL_. Pegar el contenido del `.rq` y ejecutar.
-- **SQL:** pgAdmin (o `psql`) conectado a la base `new_memorias`.
+- **SQL:** pgAdmin (o `psql`) conectado a la base `lifia_db`.

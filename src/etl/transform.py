@@ -315,7 +315,7 @@ def transform_members(graph, df_member, topic_uris):
 
 
 def transform_project_row(graph, row, topic_uris):
-    """Convierte una fila de Project en un vivo:ResearchProject. Devuelve su URI."""
+    """Convierte una fila de Project en un vivo:Project. Devuelve su URI."""
     uri = make_uri("proyecto", row["slug"])
 
     graph.add((uri, RDF.type, VIVO.Project))
@@ -378,7 +378,7 @@ LEVEL_TO_DEGREE = {
 
 
 def transform_thesis_row(graph, row, topic_uris):
-    """Convierte una fila de Thesis en bibo:Thesis/vivo:Thesis. Devuelve su URI."""
+    """Convierte una fila de Thesis en un bibo:Thesis. Devuelve su URI."""
     uri = make_uri("tesis", row["slug"])
 
     graph.add((uri, RDF.type, BIBO.Thesis))

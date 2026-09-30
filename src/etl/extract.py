@@ -17,7 +17,7 @@ TABLES = ['Member', 'Project', 'Publication', 'Scholarship', 'Thesis']
 
 # Tablas de join N:M que arma Prisma, cada una solo tiene las columnas A y B
 # (las FK). No tienen entidad propia, pero son la fuente de las propiedades
-# de objeto (vivo:authorOf, vivo:relatedBy, etc.) del mapeo ontológico.
+# de objeto (vivo:relatedBy, nodos vivo:Authorship, etc.) del mapeo ontológico.
 JOIN_TABLES = [
     '_ProjectMembers',
     '_ProjectPublications',
