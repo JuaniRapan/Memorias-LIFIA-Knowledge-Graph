@@ -749,15 +749,24 @@ def looks_like_a_name(name):
 
 
 def strip_label_prefix(raw_value):
-    """Saca etiquetas y deja solo el nombre, si el campo trae dos puntos."""
-    return raw_value.rsplit(":", 1)[-1].strip()
+    """Saca etiquetas y afiliaciones entre paréntesis, dejando solo el nombre."""
+    raw_value = raw_value.rsplit(":", 1)[-1]
+    # la institución va entre paréntesis ("Gustavo Rodriguez Barcenas (Universidad ...)")
+    # y no forma parte del nombre de la persona
+    raw_value = re.sub(r"\([^)]*\)?", "", raw_value)
+    return raw_value.strip()
 
 
 def split_names(raw_value):
     """Separa un campo de texto libre en nombres individuales por coma, "y",
-    "and", guion o barra (todas formas que aparecen en la base para separar
-    a más de una persona en el mismo campo)."""
+    "and", guion o barra. Un "Apellido, Nombre" con dos palabras no se parte."""
     raw_value = strip_label_prefix(str(raw_value))
+    # con una sola coma y una palabra de cada lado es "Apellido, Nombre" de una
+    # persona, no dos personas. Lo damos vuelta a "Nombre Apellido" para que
+    # quede igual que el resto de los nombres
+    partes = [p.strip() for p in raw_value.split(",") if p.strip()]
+    if len(partes) == 2 and all(len(p.split()) == 1 for p in partes):
+        return [f"{partes[1]} {partes[0]}"]
     return [name.strip() for name in re.split(r",| y | and |\s-\s|/", raw_value) if name.strip()]
 
 
