@@ -749,25 +749,36 @@ def looks_like_a_name(name):
 
 
 def strip_label_prefix(raw_value):
-    """Saca etiquetas y afiliaciones entre paréntesis, dejando solo el nombre."""
+    """Saca etiquetas, años y afiliaciones entre paréntesis, dejando solo el nombre."""
     raw_value = raw_value.rsplit(":", 1)[-1]
     # la institución va entre paréntesis ("Gustavo Rodriguez Barcenas (Universidad ...)")
     # y no forma parte del nombre de la persona
     raw_value = re.sub(r"\([^)]*\)?", "", raw_value)
+    # hay campos con el año de la tesis pegado al nombre ("Coria, Juan Manuel 2017 ")
+    raw_value = re.sub(r"\b(?:19|20)\d{2}\b", "", raw_value)
     return raw_value.strip()
 
 
-def split_names(raw_value):
-    """Separa un campo de texto libre en nombres individuales por coma, "y",
-    "and", guion o barra. Un "Apellido, Nombre" con dos palabras no se parte."""
-    raw_value = strip_label_prefix(str(raw_value))
-    # con una sola coma y una palabra de cada lado es "Apellido, Nombre" de una
-    # persona, no dos personas. Lo damos vuelta a "Nombre Apellido" para que
-    # quede igual que el resto de los nombres
-    partes = [p.strip() for p in raw_value.split(",") if p.strip()]
-    if len(partes) == 2 and all(len(p.split()) == 1 for p in partes):
+def split_block(block):
+    """Separa un bloque de personas por coma, "y", "and", guion o barra. Si son
+    dos partes y la primera es una sola palabra, es un "Apellido, Nombre"."""
+    block = block.strip()
+    partes = [p.strip() for p in block.split(",") if p.strip()]
+    # "Apellido, Nombre": lo damos vuelta a "Nombre Apellido" para que quede
+    # igual que el resto de los nombres
+    if len(partes) == 2 and len(partes[0].split()) == 1:
         return [f"{partes[1]} {partes[0]}"]
-    return [name.strip() for name in re.split(r",| y | and |\s-\s|/", raw_value) if name.strip()]
+    return [name.strip() for name in re.split(r",| y | and |\s-\s|/", block) if name.strip()]
+
+
+def split_names(raw_value):
+    """Separa un campo de texto libre en nombres individuales. El "|" separa
+    bloques de personas y cada bloque se parte con split_block."""
+    raw_value = strip_label_prefix(str(raw_value))
+    nombres = []
+    for block in raw_value.split("|"):
+        nombres.extend(split_block(block))
+    return nombres
 
 
 def get_or_create_external_person(graph, name, external_uris):
