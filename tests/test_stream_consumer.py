@@ -12,6 +12,10 @@ import os
 import sys
 import unittest
 from datetime import date, timedelta
+from unittest import mock
+
+import pandas as pd
+from rdflib import URIRef
 
 from rdflib.plugins.sparql import prepareUpdate
 
@@ -20,6 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "streami
 import stream_consumer as sc  # noqa: E402
 import graphdb_client  # noqa: E402
 from extract import clean_member_na_row  # noqa: E402
+from transform import build_member_name_index, resolve_exact  # noqa: E402
 
 TEMA_URI = "http://lifia.info.unlp.edu.ar/resource/tema/nlp"
 
@@ -208,6 +213,88 @@ class TestProcessEventPublication(unittest.TestCase):
         self.assertIn("/venue/journal-of-testing>", sparql)
         self.assertIn('"Titulo Nuevo"', sparql)
         prepareUpdate(sparql)
+
+
+class TestTextRelations(unittest.TestCase):
+    """director/coDirector (texto libre) se resuelven contra Member igual que en
+    la carga batch. Se mockean graphdb_client.run_update y la lectura de Postgres."""
+
+    ENVELOPE_SCHEMA = {"fields": [{"field": "before", "fields": []}, {"field": "after", "fields": []}]}
+    MEMBER_URI = "http://lifia.info.unlp.edu.ar/resource/persona/ana-lopez"
+
+    def setUp(self):
+        self.captured = []
+        self._original_run_update = graphdb_client.run_update
+        graphdb_client.run_update = self.captured.append
+        df_member = pd.DataFrame([{"id": "m1", "firstName": "Ana", "lastName": "Lopez"}])
+        self.name_index = build_member_name_index(df_member, {"m1": URIRef(self.MEMBER_URI)})
+
+    def tearDown(self):
+        graphdb_client.run_update = self._original_run_update
+
+    @staticmethod
+    def _project_row(director, title="Proyecto"):
+        return {
+            "id": "pr1", "slug": "proyecto-x", "title": title, "code": None,
+            "fundingAgency": None, "amount": None, "summary": None, "website": None,
+            "responsibleGroup": None, "startDate": None, "endDate": None,
+            "director": director, "coDirector": None, "tags": [],
+        }
+
+    def _event(self, op, before, after):
+        return {"schema": self.ENVELOPE_SCHEMA, "payload": {"op": op, "before": before, "after": after}}
+
+    def test_director_que_es_member_arma_el_rol_pi(self):
+        sc.process_event("Project", self._event("c", None, self._project_row("Ana Lopez")), {}, self.name_index)
+
+        sparql = self.captured[0]
+        self.assertIn("/rol-pi/", sparql)
+        self.assertIn(self.MEMBER_URI, sparql)
+        self.assertNotIn("persona-externa", sparql)
+        prepareUpdate(sparql)
+
+    def test_director_desconocido_se_crea_como_persona_externa(self):
+        sc.process_event("Project", self._event("c", None, self._project_row("Juan Prueba")), {}, self.name_index)
+
+        sparql = self.captured[0]
+        self.assertIn("/persona-externa/juan-prueba>", sparql)
+        self.assertIn("/rol-pi/", sparql)
+
+    def test_update_borra_el_rol_viejo_pero_no_la_persona(self):
+        before = self._project_row("Juan Prueba")
+        after = self._project_row("Ana Lopez")
+        sc.process_event("Project", self._event("u", before, after), {}, self.name_index)
+
+        delete_block = self.captured[0].split("INSERT DATA")[0]
+        self.assertIn("/rol-pi/", delete_block)
+        # la persona externa es un recurso compartido: solo se borran los triples del rol
+        self.assertNotIn("foaf/0.1/name", delete_block)
+
+    def test_sin_name_index_no_se_resuelve_texto_libre(self):
+        sc.process_event("Project", self._event("c", None, self._project_row("Ana Lopez")), {})
+        self.assertNotIn("/rol-pi/", self.captured[0])
+
+
+class TestLoadNameIndex(unittest.TestCase):
+    """load_name_index() lee Member de Postgres: se mockea la conexión y el SELECT."""
+
+    def test_arma_el_indice_con_la_uri_del_slug(self):
+        df_member = pd.DataFrame([{"id": "m1", "slug": "ana-lopez", "firstName": "Ana", "lastName": "Lopez"}])
+        conn = mock.Mock()
+        with mock.patch.object(sc, "get_db_connection", return_value=conn), \
+                mock.patch.object(sc.pd, "read_sql", return_value=df_member):
+            name_index = sc.load_name_index()
+
+        self.assertEqual(
+            resolve_exact("Ana Lopez", name_index),
+            URIRef("http://lifia.info.unlp.edu.ar/resource/persona/ana-lopez"),
+        )
+        conn.close.assert_called_once()
+
+    def test_sin_conexion_tira_error(self):
+        with mock.patch.object(sc, "get_db_connection", return_value=None):
+            with self.assertRaises(RuntimeError):
+                sc.load_name_index()
 
 
 if __name__ == "__main__":
