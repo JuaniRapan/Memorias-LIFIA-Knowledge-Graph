@@ -164,6 +164,19 @@ def split_keywords(raw_value):
     return [k.strip() for k in raw_value.split(separador) if k.strip()]
 
 
+def row_topic_labels(row):
+    """Devuelve los labels de temas de una fila: los `tags` (array) y, si es
+    una Thesis, sus `keywords` (texto libre) ya separados."""
+    labels = []
+    tags = row.get("tags") if hasattr(row, "get") else None
+    if isinstance(tags, (list, tuple)):
+        labels.extend(str(t).strip() for t in tags if str(t).strip())
+    keywords = row.get("keywords") if hasattr(row, "get") else None
+    if has_value(keywords) and str(keywords).strip():
+        labels.extend(split_keywords(keywords))
+    return labels
+
+
 def normalize_topic_label(texto):
     """Normaliza un label para matchear contra CSO (minúscula, guion a espacio)."""
     # hace falta aparte de slugify() porque CSO tiene labels con guion y sin
@@ -232,13 +245,8 @@ def transform_topics(graph, dataframes):
     all_tags = set()
 
     for table in ("Member", "Project", "Publication", "Thesis"):
-        for tags in dataframes[table]["tags"]:
-            if isinstance(tags, (list, tuple)):
-                all_tags.update(str(t).strip() for t in tags if str(t).strip())
-
-    for keywords in dataframes["Thesis"]["keywords"]:
-        if has_value(keywords) and str(keywords).strip():
-            all_tags.update(split_keywords(keywords))
+        for _, row in dataframes[table].iterrows():
+            all_tags.update(row_topic_labels(row))
 
     cso_lookup = load_cso_lookup()
 

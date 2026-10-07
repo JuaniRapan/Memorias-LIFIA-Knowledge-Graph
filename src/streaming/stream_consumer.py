@@ -26,7 +26,7 @@ from transform import (  # noqa: E402
     transform_member_row, transform_project_row, transform_scholarship_row,
     transform_thesis_row, transform_publication_row,
     JOIN_SPEC, REIFIED_JOIN_SPEC, add_authorship,
-    TEXT_RELATIONS, VIVO, build_member_name_index, resolve_text_relations_for_row,
+    TEXT_RELATIONS, VIVO, row_topic_labels, build_member_name_index, resolve_text_relations_for_row,
 )
 
 load_dotenv()
@@ -133,9 +133,10 @@ def transform_row(graph, table, row, cso_lookup, name_index=None):
     if table == "Member":
         row = clean_member_na_row(row)
 
+    # tags + keywords (las de Thesis son texto libre), igual que transform_topics en batch
     topic_uris = {
         tag: resolve_topic_uri(graph, tag, cso_lookup)
-        for tag in (row.get("tags") or [])
+        for tag in row_topic_labels(row)
     }
 
     if table == "Publication":
