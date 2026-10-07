@@ -8,6 +8,7 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 
 from confluent_kafka import Consumer, KafkaError
+import pandas as pd
 from dotenv import load_dotenv
 from rdflib import Graph, Literal, URIRef
 
@@ -18,13 +19,14 @@ import graphdb_client
 # src/streaming/ automáticamente, así que hay que sumar src/etl/ a mano
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "etl"))
-from extract import JSON_COLUMNS, clean_member_na_row  # noqa: E402
+from extract import JSON_COLUMNS, clean_member_na_row, get_db_connection  # noqa: E402
 from transform import (  # noqa: E402
     make_uri, slugify, get_entry_tags, load_cso_lookup,
     resolve_topic_uri, resolve_venue_uri,
     transform_member_row, transform_project_row, transform_scholarship_row,
     transform_thesis_row, transform_publication_row,
     JOIN_SPEC, REIFIED_JOIN_SPEC, add_authorship,
+    TEXT_RELATIONS, VIVO, build_member_name_index, resolve_text_relations_for_row,
 )
 
 load_dotenv()
@@ -104,7 +106,28 @@ def decode_row(payload_row, envelope_schema, field_name):
     }
 
 
-def transform_row(graph, table, row, cso_lookup):
+def load_name_index():
+    """Lee los Member de Postgres y arma el índice de nombres que usa transform.py
+    para resolver director/student/etc. (texto libre) contra una persona."""
+    conn = get_db_connection()
+    if conn is None:
+        raise RuntimeError("No se pudo conectar a Postgres para armar el índice de nombres")
+    try:
+        df_member = pd.read_sql('SELECT id, slug, "firstName", "lastName" FROM public."Member"', conn)
+    finally:
+        conn.close()
+
+    # mismo criterio que la carga batch: el "N/A" cargado a mano cuenta como sin dato
+    df_member = df_member.replace("N/A", None)
+    uri_lookup = {row["id"]: make_uri("persona", row["slug"]) for _, row in df_member.iterrows()}
+    return build_member_name_index(df_member, uri_lookup)
+
+
+# tablas que tienen campos de texto libre para resolver contra Member
+TEXT_RELATION_TABLES = {table for table, _, _ in TEXT_RELATIONS}
+
+
+def transform_row(graph, table, row, cso_lookup, name_index=None):
     """Arma los topic_uris/venue_uris que necesita la fila y llama a la
     función de transform.py correspondiente. Devuelve la URI generada."""
     if table == "Member":
@@ -122,7 +145,16 @@ def transform_row(graph, table, row, cso_lookup):
         venue_uris = {slugify(venue_name): venue_uri} if venue_uri else {}
         return transform_publication_row(graph, row, topic_uris, venue_uris)
 
-    return ROW_TRANSFORMS[table](graph, row, topic_uris)
+    uri = ROW_TRANSFORMS[table](graph, row, topic_uris)
+
+    # director/coDirector/student/otherAdvisors no son FK: se resuelven por nombre
+    # contra los Member, igual que en la carga batch. Se arranca con external_uris
+    # vacío en cada evento a propósito: así los triples de la persona externa se
+    # regeneran siempre, y si el evento se reintenta no se pierde por quedar cacheada
+    if name_index is not None and table in TEXT_RELATION_TABLES:
+        resolve_text_relations_for_row(graph, table, row, uri, name_index, {})
+
+    return uri
 
 
 def _entity_triples(graph, entity_uri):
@@ -138,6 +170,13 @@ def _entity_triples(graph, entity_uri):
     triples = list(graph.triples((entity_uri, None, None)))
     for sub_uri in sub_recursos:
         triples += list(graph.triples((sub_uri, None, None)))
+
+    # los roles de director/coDirector (rol-pi) son nodos propios de este proyecto,
+    # y además cuelga de la persona un vivo:relatedBy hacia ellos. La persona en sí
+    # (Member o externa) no se toca porque es un recurso compartido
+    for rol_uri in graph.objects(entity_uri, VIVO.contributingRole):
+        triples += list(graph.triples((rol_uri, None, None)))
+        triples += list(graph.triples((None, VIVO.relatedBy, rol_uri)))
     return triples
 
 
@@ -279,7 +318,7 @@ def _rename_uri_updates(old_uri, new_uri, triples_ya_manejados):
     ]
 
 
-def process_event(table, msg_value, cso_lookup):
+def process_event(table, msg_value, cso_lookup, name_index=None):
     """Aplica un evento Debezium (create/update/delete) sobre GraphDB."""
     envelope_schema = msg_value["schema"]
     payload = msg_value["payload"]
@@ -301,7 +340,7 @@ def process_event(table, msg_value, cso_lookup):
         else:
             old_uri = make_uri(resource_type, slug_anterior)
             scratch = Graph()
-            transform_row(scratch, table, decode_row(before, envelope_schema, "before"), cso_lookup)
+            transform_row(scratch, table, decode_row(before, envelope_schema, "before"), cso_lookup, name_index)
             old_triples = _entity_triples(scratch, old_uri)
             if old_triples:
                 updates.append(f"DELETE DATA {{\n{_to_data_block(old_triples)}\n}}")
@@ -315,7 +354,7 @@ def process_event(table, msg_value, cso_lookup):
 
     row = decode_row(after, envelope_schema, "after")
     scratch = Graph()
-    new_uri = transform_row(scratch, table, row, cso_lookup)
+    new_uri = transform_row(scratch, table, row, cso_lookup, name_index)
     # acá sí van TODOS los triples que generó el evento, no solo los de la
     # entidad: puede haber creado además un tema/venue nuevo que no existía
     new_triples = list(scratch.triples((None, None, None)))
@@ -349,6 +388,9 @@ def main():
     print("Cargando el vocabulario de CSO (para resolver temas)...")
     cso_lookup = load_cso_lookup()
 
+    print("Cargando los Member de Postgres (para resolver director/student/etc.)...")
+    name_index = load_name_index()
+
     print(f"Escuchando {', '.join(TOPICS)}... (Ctrl+C para cortar)")
     try:
         while True:
@@ -372,7 +414,11 @@ def main():
                 if table in JOIN_TABLES:
                     process_join_event(table, msg_value)
                 else:
-                    process_event(table, msg_value, cso_lookup)
+                    process_event(table, msg_value, cso_lookup, name_index)
+                    # si cambió un Member hay que rearmar el índice, así los
+                    # eventos que lleguen después ya lo pueden resolver
+                    if table == "Member":
+                        name_index = load_name_index()
             except Exception as error:
                 # si GraphDB está caído, tira un 5xx después de agotar los
                 # reintentos del cliente, o la relación llegó antes que su

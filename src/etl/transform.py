@@ -805,6 +805,47 @@ def get_or_create_external_person(graph, name, external_uris):
     return uri
 
 
+def resolve_text_relations_for_row(graph, table, row, subject_uri, name_index, external_uris):
+    """Resuelve los campos de texto libre (director, student, etc.) de UNA fila
+    contra Member y agrega las relaciones al grafo. Devuelve el log de los
+    nombres que no matchearon ningún Member."""
+    log = []
+
+    for rel_table, column, apply_relation in TEXT_RELATIONS:
+        if rel_table != table:
+            continue
+        raw_value = row[column]
+        if not has_value(raw_value) or not str(raw_value).strip():
+            continue
+
+        # antes de partir el campo en varias personas, probamos si en
+        # realidad es una sola escrita "Apellido, Nombre" (la coma no
+        # siempre separa a dos personas distintas). Acá se usa
+        # resolve_exact, no resolve_person, porque el match "flexible"
+        # por subconjunto de palabras podría, en un campo con dos
+        # personas, quedarse con la que sí matchea y perder a la otra
+        clean_value = strip_label_prefix(str(raw_value))
+        whole_value_uri = resolve_exact(clean_value, name_index)
+        names = [clean_value] if whole_value_uri is not None else split_names(raw_value)
+
+        for name in names:
+            person_uri = whole_value_uri if whole_value_uri is not None else resolve_person(name, name_index)
+            if person_uri is not None:
+                apply_relation(graph, subject_uri, person_uri)
+                continue
+
+            if not looks_like_a_name(name):
+                log.append((table, column, name, "descartado (no tiene forma de nombre de persona)"))
+                continue
+
+            external_uri = get_or_create_external_person(graph, name, external_uris)
+            if external_uri is not None:
+                apply_relation(graph, subject_uri, external_uri)
+                log.append((table, column, name, "creado como persona externa (no es Member)"))
+
+    return log
+
+
 def transform_text_relations(graph, dataframes, uri_lookup, name_index, external_uris):
     """Resuelve director/coDirector/student/otherAdvisors contra Member, o contra
     una persona externa si no matchea. Devuelve un log de qué pasó con cada nombre
@@ -812,37 +853,15 @@ def transform_text_relations(graph, dataframes, uri_lookup, name_index, external
     tiene forma de nombre de persona)."""
     log = []
 
-    for table, column, apply_relation in TEXT_RELATIONS:
+    # dict.fromkeys para no repetir tablas y mantener el orden de TEXT_RELATIONS
+    for table in dict.fromkeys(table for table, _, _ in TEXT_RELATIONS):
         for _, row in dataframes[table].iterrows():
             subject_uri = uri_lookup.get(row["id"])
-            raw_value = row[column]
-            if subject_uri is None or not has_value(raw_value) or not str(raw_value).strip():
+            if subject_uri is None:
                 continue
-
-            # antes de partir el campo en varias personas, probamos si en
-            # realidad es una sola escrita "Apellido, Nombre" (la coma no
-            # siempre separa a dos personas distintas). Acá se usa
-            # resolve_exact, no resolve_person, porque el match "flexible"
-            # por subconjunto de palabras podría, en un campo con dos
-            # personas, quedarse con la que sí matchea y perder a la otra
-            clean_value = strip_label_prefix(str(raw_value))
-            whole_value_uri = resolve_exact(clean_value, name_index)
-            names = [clean_value] if whole_value_uri is not None else split_names(raw_value)
-
-            for name in names:
-                person_uri = whole_value_uri if whole_value_uri is not None else resolve_person(name, name_index)
-                if person_uri is not None:
-                    apply_relation(graph, subject_uri, person_uri)
-                    continue
-
-                if not looks_like_a_name(name):
-                    log.append((table, column, name, "descartado (no tiene forma de nombre de persona)"))
-                    continue
-
-                external_uri = get_or_create_external_person(graph, name, external_uris)
-                if external_uri is not None:
-                    apply_relation(graph, subject_uri, external_uri)
-                    log.append((table, column, name, "creado como persona externa (no es Member)"))
+            log.extend(resolve_text_relations_for_row(
+                graph, table, row, subject_uri, name_index, external_uris
+            ))
 
     return log
 
