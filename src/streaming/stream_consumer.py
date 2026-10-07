@@ -7,7 +7,7 @@ import os
 import sys
 from datetime import date, datetime, timedelta, timezone
 
-from confluent_kafka import Consumer
+from confluent_kafka import Consumer, KafkaError
 from dotenv import load_dotenv
 from rdflib import Graph, Literal, URIRef
 
@@ -212,6 +212,7 @@ def process_join_event(table, msg_value):
         old_pair = _resolve_join_pair(before)
         if old_pair is not None:
             scratch = Graph()
+            # Crea triple sobre grafo vacío
             _add_join_triples(scratch, table, *old_pair)
             old_triples = list(scratch.triples((None, None, None)))
             if old_triples:
@@ -235,6 +236,7 @@ def process_join_event(table, msg_value):
         )
 
     scratch = Graph()
+    # Crea triple sobre grafo vacío
     _add_join_triples(scratch, table, *new_pair)
     new_triples = list(scratch.triples((None, None, None)))
     updates.append(f"INSERT DATA {{\n{_to_data_block(new_triples)}\n}}")
@@ -353,6 +355,11 @@ def main():
             if msg is None:
                 continue
             if msg.error():
+                # Debezium crea cada tópico recién cuando llega el primer cambio
+                # de esa tabla, así que antes de eso Kafka avisa que no existe.
+                # No es un problema de verdad, entonces no lo mostramos
+                if msg.error().code() == KafkaError.UNKNOWN_TOPIC_OR_PART:
+                    continue
                 print(f"Error de Kafka: {msg.error()}")
                 continue
             if msg.value() is None:
