@@ -18,7 +18,7 @@ import graphdb_client
 # src/streaming/ automáticamente, así que hay que sumar src/etl/ a mano
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "etl"))
-from extract import clean_member_na_row  # noqa: E402
+from extract import JSON_COLUMNS, clean_member_na_row  # noqa: E402
 from transform import (  # noqa: E402
     make_uri, slugify, get_entry_tags, load_cso_lookup,
     resolve_topic_uri, resolve_venue_uri,
@@ -62,9 +62,9 @@ TOPICS = [
 EPOCH = date(1970, 1, 1)
 
 
-def _decode_logical_type(value, field_schema):
+def _decode_logical_type(value, field_schema, column):
     """Traduce un valor codificado por Debezium a su tipo Python real, según
-    el nombre del tipo lógico que trae el propio schema del mensaje."""
+    el tipo lógico que trae el schema del mensaje y el nombre de la columna."""
     if value is None:
         return None
 
@@ -78,9 +78,10 @@ def _decode_logical_type(value, field_schema):
         return datetime.fromtimestamp(value / 1000, tz=timezone.utc).replace(tzinfo=None)
 
     # bibtexData es un jsonb de Postgres: Debezium lo manda como un string
-    # con el JSON adentro en vez de como objeto. Se detecta igual que en 
-    # _jsonify_cell/_dejsonify_cell en extract.py.
-    if isinstance(value, str) and value[:1] in "[{":
+    # con el JSON adentro en vez de como objeto. Solo se parsean las columnas
+    # de JSON_COLUMNS: un texto libre que arranque con "[" (ej: interestsInEnglish)
+    # tiene que quedar como string
+    if column in JSON_COLUMNS and isinstance(value, str) and value[:1] in "[{":
         try:
             return json.loads(value)
         except json.JSONDecodeError:
@@ -98,7 +99,7 @@ def decode_row(payload_row, envelope_schema, field_name):
     struct_schema = next(f for f in envelope_schema["fields"] if f["field"] == field_name)
     schema_by_column = {f["field"]: f for f in struct_schema["fields"]}
     return {
-        column: _decode_logical_type(value, schema_by_column.get(column, {}))
+        column: _decode_logical_type(value, schema_by_column.get(column, {}), column)
         for column, value in payload_row.items()
     }
 

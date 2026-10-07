@@ -40,6 +40,11 @@ INTERIM_DIR = 'data/interim'
 DATE_COLUMN_TYPES = {"date", "timestamp without time zone", "timestamp with time zone"}
 DATE_COLUMNS_PATH = f"{INTERIM_DIR}/_date_columns.json"
 
+# Únicas columnas que en Postgres son listas/jsonb de verdad. Hay que
+# nombrarlas porque otros campos de texto libre (ej: interestsInEnglish)
+# también pueden arrancar con "[" y no se tienen que parsear
+JSON_COLUMNS = {"tags", "bibtexData"}
+
 
 def get_db_connection():
     try:
@@ -166,7 +171,8 @@ def load_interim():
     dataframes = {}
     for table in TABLES + JOIN_TABLES:
         df = pd.read_csv(f"{INTERIM_DIR}/{table}.csv")
-        df = df.map(_dejsonify_cell)
+        for column in JSON_COLUMNS & set(df.columns):
+            df[column] = df[column].map(_dejsonify_cell)
         for column, pg_type in date_columns.get(table, {}).items():
             if column in df.columns:
                 df[column] = _cast_date_column(df[column], pg_type)

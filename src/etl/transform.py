@@ -555,6 +555,7 @@ def transform_relations(graph, dataframes, uri_lookup):
             if uri_a is not None and uri_b is not None:
                 graph.add((uri_a, predicate, uri_b))
 
+    # Relaciones mas complejas que requieren una función para generar varias tripletas
     for join_table, add_relation in REIFIED_JOIN_SPEC.items():
         for _, row in dataframes[join_table].iterrows():
             uri_a = uri_lookup.get(row["A"])
