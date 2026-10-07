@@ -270,6 +270,20 @@ class TestTextRelations(unittest.TestCase):
         # la persona externa es un recurso compartido: solo se borran los triples del rol
         self.assertNotIn("foaf/0.1/name", delete_block)
 
+    def test_keywords_de_thesis_se_resuelven_como_temas(self):
+        row = {
+            "id": "t1", "slug": "tesis-x", "title": "Tesis", "level": "Undergraduate", "career": None,
+            "summary": None, "reportUrl": None, "website": None, "progress": None,
+            "startDate": None, "endDate": None, "student": None, "director": None,
+            "coDirector": None, "otherAdvisors": None,
+            "keywords": "grafos de conocimiento, procesamiento de lenguaje natural", "tags": [],
+        }
+        sc.process_event("Thesis", self._event("c", None, row), {}, self.name_index)
+
+        sparql = self.captured[0]
+        self.assertIn("/tema/grafos-de-conocimiento>", sparql)
+        self.assertIn("/tema/procesamiento-de-lenguaje-natural>", sparql)
+
     def test_sin_name_index_no_se_resuelve_texto_libre(self):
         sc.process_event("Project", self._event("c", None, self._project_row("Ana Lopez")), {})
         self.assertNotIn("/rol-pi/", self.captured[0])
