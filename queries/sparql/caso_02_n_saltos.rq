@@ -2,6 +2,9 @@
 #
 # QUERY: dado un investigador del LIFIA, ¿quiénes son sus colegas de colegas
 # con los que todavía NO publicó directamente?
+#
+# Para cambiar de investigador hay que tocar el IRI en los dos BIND (el del
+# bloque principal y el del MINUS).
 
 PREFIX vivo: <http://vivoweb.org/ontology/core#>
 PREFIX foaf: <http://xmlns.com/foaf/0.1/>
@@ -14,49 +17,46 @@ PREFIX bibo: <http://purl.org/ontology/bibo/>
 SELECT DISTINCT ?colega ?nombre WHERE {
   BIND(<http://lifia.info.unlp.edu.ar/resource/persona/diego-torres> AS ?persona)
 
-  {
-    SELECT DISTINCT ?persona ?colega WHERE {
-      BIND(<http://lifia.info.unlp.edu.ar/resource/persona/diego-torres> AS ?persona)
+  # 1er salto: persona -> autoria1 -> publicación -> autoria2 -> coautor_directo
+  # se tipa ?publicacionN como bibo:Document porque vivo:relates es
+  # simétrico (lo usan tanto la persona como la publicación del mismo
+  # nodo de autoría), y sin el tipo la consulta puede "rebotar" hacia
+  # una persona en vez de avanzar a la publicación
+  ?persona vivo:relatedBy ?autoria1 .
+  ?autoria1 a vivo:Authorship ;
+            vivo:relates ?publicacion1 .
+  ?publicacion1 a bibo:Document .
+  ?publicacion1 vivo:relatedBy ?autoria2 .
+  ?autoria2 a vivo:Authorship ;
+            vivo:relates ?directo .
 
-      # 1er salto: persona -> autoria1 -> publicación -> autoria2 -> coautor_directo
-      # se tipa ?publicacionN como bibo:Document porque vivo:relates es
-      # simétrico (lo usan tanto la persona como la publicación del mismo
-      # nodo de autoría), y sin el tipo la consulta puede "rebotar" hacia
-      # una persona en vez de avanzar a la publicación
-      ?persona vivo:relatedBy ?autoria1 .
-      ?autoria1 a vivo:Authorship ;
-                vivo:relates ?publicacion1 .
-      ?publicacion1 a bibo:Document .
-      ?publicacion1 vivo:relatedBy ?autoria2 .
-      ?autoria2 a vivo:Authorship ;
-                vivo:relates ?directo .
+  # 2do salto: coautor_directo -> autoria3 -> otra publicación -> autoria4 -> colega
+  ?directo vivo:relatedBy ?autoria3 .
+  ?autoria3 a vivo:Authorship ;
+            vivo:relates ?publicacion2 .
+  ?publicacion2 a bibo:Document .
+  ?publicacion2 vivo:relatedBy ?autoria4 .
+  ?autoria4 a vivo:Authorship ;
+            vivo:relates ?colega .
 
-      # 2do salto: coautor_directo -> autoria3 -> otra publicación -> autoria4 -> colega
-      ?directo vivo:relatedBy ?autoria3 .
-      ?autoria3 a vivo:Authorship ;
-                vivo:relates ?publicacion2 .
-      ?publicacion2 a bibo:Document .
-      ?publicacion2 vivo:relatedBy ?autoria4 .
-      ?autoria4 a vivo:Authorship ;
-                vivo:relates ?colega .
+  # Con el razonador (OWL2-RL), owl:sameAs copia las tripletas de cada persona
+  # a su IRI de ORCID/DBLP, así que sin este filtro cada colega sale repetido.
+  # Nos quedamos solo con el IRI propio del LIFIA, que es el canónico.
+  FILTER(?colega != ?persona)
+  FILTER(STRSTARTS(STR(?colega), "http://lifia.info.unlp.edu.ar/resource/persona/"))
 
-      FILTER(?colega != ?persona)
-      FILTER(STRSTARTS(STR(?colega), "http://lifia.info.unlp.edu.ar/resource/persona/"))
-    }
-  }
-
-  # coautores directos (1 solo salto), calculado una sola vez y no por fila
+  # coautores directos (1 solo salto). El MINUS no ve las variables del
+  # bloque de arriba, por eso necesita su propio BIND de la persona
   MINUS {
-    SELECT DISTINCT ?persona ?colega WHERE {
-      BIND(<http://lifia.info.unlp.edu.ar/resource/persona/diego-torres> AS ?persona)
+    BIND(<http://lifia.info.unlp.edu.ar/resource/persona/diego-torres> AS ?persona_base)
 
-      ?persona vivo:relatedBy ?a1 .
-      ?a1 a vivo:Authorship ; vivo:relates ?pubX .
-      ?pubX a bibo:Document .
-      ?pubX vivo:relatedBy ?a2 .
-      ?a2 a vivo:Authorship ; vivo:relates ?colega .
-      FILTER(STRSTARTS(STR(?colega), "http://lifia.info.unlp.edu.ar/resource/persona/"))
-    }
+    ?persona_base vivo:relatedBy ?a1 .
+    ?a1 a vivo:Authorship ;
+        vivo:relates ?pubX .
+    ?pubX a bibo:Document .
+    ?pubX vivo:relatedBy ?a2 .
+    ?a2 a vivo:Authorship ;
+        vivo:relates ?colega .
   }
 
   ?colega foaf:firstName ?nombre_pila ;

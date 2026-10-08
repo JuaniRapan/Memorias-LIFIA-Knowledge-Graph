@@ -6,9 +6,14 @@
 # contra Member por nombre.
 
 PREFIX vivo: <http://vivoweb.org/ontology/core#>
+PREFIX bibo: <http://purl.org/ontology/bibo/>
 PREFIX dc: <http://purl.org/dc/elements/1.1/>
 
-SELECT DISTINCT ?trabajo ?titulo ?tipo WHERE {
+# Un mismo trabajo puede llegar por las dos vías (tabla de join y texto libre),
+# así que se agrupa por trabajo y las fuentes se juntan en una sola columna
+SELECT ?trabajo ?titulo ?tipo
+       (GROUP_CONCAT(DISTINCT ?fuente; separator=" + ") AS ?fuentes)
+WHERE {
   BIND(<http://lifia.info.unlp.edu.ar/resource/persona/diego-torres> AS ?persona)
 
   {
@@ -18,17 +23,27 @@ SELECT DISTINCT ?trabajo ?titulo ?tipo WHERE {
     ?autoria a vivo:Authorship ;
              vivo:relates ?trabajo .
     BIND("publicacion" AS ?tipo)
+    BIND("tabla de join" AS ?fuente)
   } UNION {
-    # tesis conectadas por tabla de join (_ThesisMembers)
-    ?persona vivo:relatedBy ?trabajo .
-    BIND("tesis (tabla de join)" AS ?tipo)
+    # tesis conectadas por tabla de join (_ThesisMembers): el ETL la guarda
+    # reificada, persona -> vivo:Relationship <- tesis (no hay arista directa)
+    ?persona vivo:relatedBy ?relacion .
+    ?relacion a vivo:Relationship ;
+              vivo:relates ?trabajo .
+    ?trabajo a bibo:Thesis .
+    BIND("tesis" AS ?tipo)
+    BIND("tabla de join" AS ?fuente)
   } UNION {
     # tesis conectadas por texto libre (director/coDirector/student/otherAdvisors),
     # ya resuelto contra Member por el ETL con el matching de nombres
-    ?trabajo vivo:relates ?persona .
-    BIND("tesis (texto)" AS ?tipo)
+    # (se tipa como bibo:Thesis porque Scholarship.director se carga igual)
+    ?trabajo a bibo:Thesis ;
+             vivo:relates ?persona .
+    BIND("tesis" AS ?tipo)
+    BIND("texto libre" AS ?fuente)
   }
 
   ?trabajo dc:title ?titulo .
 }
+GROUP BY ?trabajo ?titulo ?tipo
 ORDER BY ?tipo ?titulo
