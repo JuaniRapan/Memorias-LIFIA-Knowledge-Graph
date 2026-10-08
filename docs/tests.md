@@ -101,8 +101,6 @@ esos archivos, todo el grupo se salta con un mensaje.
 - `test_progress_de_thesis_no_esta_en_rdfs_comment`: el avance de la tesis no va como número dentro de `rdfs:comment`.
 - `test_completion_percentage_es_entero_entre_0_y_100`: `lifia-ontology:completionPercentage` existe y es un entero entre 0 y 100.
 - `test_keywords_de_thesis_se_separan_individualmente`: hay tesis conectadas al tema real de `machine_learning` de CSO.
-- `test_no_quedan_terminos_vivo_inventados`: no se usa ninguno de los seis términos que no existen en VIVO (`authorOf`,
-  `hasPrincipalInvestigatorRole`, `ResearchProject`, `Thesis`, `highestDegree`, `webpage`).
 
 ---
 
