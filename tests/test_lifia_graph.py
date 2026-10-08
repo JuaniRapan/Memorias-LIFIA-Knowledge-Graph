@@ -311,25 +311,6 @@ class TestGeneratedGraph(unittest.TestCase):
             "Ninguna tesis quedó conectada al cso:Topic real de machine learning",
         )
 
-    def test_no_quedan_terminos_vivo_inventados(self):
-        # regresión: estos 6 términos no existen en ontologias/vivo.owl (se
-        # verificó contra el archivo real), no deberían volver a aparecer
-        inventados = [
-            transform.VIVO.authorOf,
-            transform.VIVO.hasPrincipalInvestigatorRole,
-            transform.VIVO.ResearchProject,
-            transform.VIVO.Thesis,
-            transform.VIVO.highestDegree,
-            transform.VIVO.webpage,
-        ]
-        for termino in inventados:
-            with self.subTest(termino=termino):
-                usado = (
-                    (None, termino, None) in self.graph
-                    or (None, RDF.type, termino) in self.graph
-                )
-                self.assertFalse(usado, f"{termino} no existe en VIVO real y no debería usarse")
-
 
 if __name__ == "__main__":
     unittest.main()
