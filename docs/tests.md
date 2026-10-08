@@ -71,17 +71,6 @@ Prueba `looks_like_a_name`.
 - `test_nombre_compuesto_con_particulas`: "Maria de la Paz Diulio" es un nombre; "de la" no cuenta como palabra de contenido.
 - `test_titulo_de_tesis_no_es_nombre`: "Requerimientos de calidad en lenguaje natural" no es un nombre.
 
-### Autoría y rol de investigador principal (`TestAuthorshipYPiRole`)
-
-Verifican el patrón de nodo intermedio que se usa porque `vivo:authorOf` y
-`vivo:hasPrincipalInvestigatorRole` no existen en VIVO.
-
-- `test_add_authorship_arma_el_nodo_con_las_cuatro_aristas`: `add_authorship` crea un nodo
-  `vivo:Authorship` con su URI, conectado a la persona y a la publicación con `vivo:relatedBy` y `vivo:relates`.
-- `test_transform_authorships_ignora_ids_sin_uri`: si los ids no tienen URI conocida, no se agrega nada al grafo.
-- `test_add_pi_role_arma_el_nodo_con_relatedby_y_contributingrole`: `add_pi_role` crea un
-  `vivo:PrincipalInvestigatorRole` conectado a la persona y al proyecto, con las propiedades de ida y de vuelta.
-
 ### Revisar el grafo ya generado (`TestGeneratedGraph`)
 
 Lee `data/processed/lifia_graph.ttl` y lo compara con los CSV de `data/interim/`. Si faltan
