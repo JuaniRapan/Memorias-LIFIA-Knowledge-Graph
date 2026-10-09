@@ -144,7 +144,11 @@ def transform_row(graph, table, row, cso_lookup, name_index=None):
         venue_uri = resolve_venue_uri(graph, entry_tags)
         venue_name = (entry_tags.get("journal") or entry_tags.get("booktitle") or "").strip()
         venue_uris = {slugify(venue_name): venue_uri} if venue_uri else {}
-        return transform_publication_row(graph, row, topic_uris, venue_uris)
+        uri = transform_publication_row(graph, row, topic_uris, venue_uris)
+        # los autores también se resuelven por nombre contra los Member, igual que en batch
+        if name_index is not None:
+            resolve_text_relations_for_row(graph, table, row, uri, name_index, {})
+        return uri
 
     uri = ROW_TRANSFORMS[table](graph, row, topic_uris)
 

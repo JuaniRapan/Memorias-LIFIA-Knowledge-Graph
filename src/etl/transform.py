@@ -468,10 +468,10 @@ def transform_publication_row(graph, row, topic_uris, venue_uris):
     if venue_slug and venue_slug in venue_uris:
         graph.add((uri, BIBO.presentedAt, venue_uris[venue_slug]))
 
-    # authors trae la lista completa de autores como un solo string
-    # (incluye coautores que no son del LIFIA), así que se vuelca como
-    # dc:creator en texto libre. La relación "real" con los Member del
-    # lab se arma aparte, a partir de la tabla _PublicationMembers
+    # authors trae la lista completa de autores como un solo string, se
+    # vuelca tal cual como dc:creator para no perder el orden ni el texto
+    # original. Las autorías como nodo (Member o persona externa) se arman
+    # aparte, desde TEXT_RELATIONS y desde la tabla _PublicationMembers
     authors_raw = row["authors"]
     if has_value(authors_raw) and str(authors_raw).strip():
         for author in str(authors_raw).split(" and "):
@@ -729,6 +729,11 @@ def add_pi_role(graph, project_uri, person_uri):
     graph.add((project_uri, VIVO.contributingRole, rol_uri))
 
 
+def add_author_authorship(graph, publication_uri, person_uri):
+    """Adapta add_authorship al orden (sujeto, persona) que usa TEXT_RELATIONS."""
+    add_authorship(graph, person_uri, publication_uri)
+
+
 # (tabla, columna, función que agrega la relación ya resuelta) para cada
 # campo de texto libre que hay que resolver contra Member
 TEXT_RELATIONS = [
@@ -741,6 +746,7 @@ TEXT_RELATIONS = [
     ("Thesis", "coDirector", _add_direct_relation(VIVO.relates)),
     ("Thesis", "student", _add_direct_relation(VIVO.relates)),
     ("Thesis", "otherAdvisors", _add_direct_relation(VIVO.relates)),
+    ("Publication", "authors", add_author_authorship),
 ]
 
 # un nombre de persona real, en este dataset, nunca tiene más de 4 palabras
@@ -790,6 +796,26 @@ def split_names(raw_value):
     return nombres
 
 
+def split_authors(raw_value):
+    """Separa Publication.authors: cada " and " es un autor y si viene como
+    "Apellido, Nombre" lo damos vuelta (la coma acá no separa personas)."""
+    nombres = []
+    for author in str(raw_value).split(" and "):
+        author = strip_label_prefix(author)
+        partes = [p.strip() for p in author.split(",") if p.strip()]
+        if len(partes) == 2:
+            author = f"{partes[1]} {partes[0]}"
+        if author.strip():
+            nombres.append(author.strip())
+    return nombres
+
+
+# (tabla, columna) -> función para partir el campo, si no sirve split_names
+NAME_SPLITTERS = {
+    ("Publication", "authors"): split_authors,
+}
+
+
 def get_or_create_external_person(graph, name, external_uris):
     """Crea (o reusa) un nodo foaf:Person liviano para alguien mencionado en la
     base que no está cargado como Member, para no perder la relación ni
@@ -832,9 +858,15 @@ def resolve_text_relations_for_row(graph, table, row, subject_uri, name_index, e
         # resolve_exact, no resolve_person, porque el match "flexible"
         # por subconjunto de palabras podría, en un campo con dos
         # personas, quedarse con la que sí matchea y perder a la otra
-        clean_value = strip_label_prefix(str(raw_value))
-        whole_value_uri = resolve_exact(clean_value, name_index)
-        names = [clean_value] if whole_value_uri is not None else split_names(raw_value)
+        splitter = NAME_SPLITTERS.get((table, column))
+        if splitter is not None:
+            # authors ya viene separado por " and ", no hace falta el intento de arriba
+            whole_value_uri = None
+            names = splitter(raw_value)
+        else:
+            clean_value = strip_label_prefix(str(raw_value))
+            whole_value_uri = resolve_exact(clean_value, name_index)
+            names = [clean_value] if whole_value_uri is not None else split_names(raw_value)
 
         for name in names:
             person_uri = whole_value_uri if whole_value_uri is not None else resolve_person(name, name_index)
