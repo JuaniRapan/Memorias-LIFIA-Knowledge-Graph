@@ -185,6 +185,20 @@ def _entity_triples(graph, entity_uri):
     return triples
 
 
+def _incoming_relations_updates(entity_uri):
+    """Arma los updates que limpian lo que otras entidades dejan apuntando a
+    `entity_uri` (nodos de autoría/rol/relación y propiedades directas)."""
+    return [
+        # nodos reificados (Authorship, Relationship, roles): se borran enteros
+        # y también los triples que cuelgan hacia ellos (vivo:relatedBy, contributingRole)
+        f"DELETE {{ ?n ?np ?no . ?x ?xp ?n }} WHERE {{ "
+        f"?n <{VIVO.relates}> <{entity_uri}> . "
+        f"{{ ?n ?np ?no }} UNION {{ ?x ?xp ?n }} }}",
+        # propiedades directas que quedaron apuntando a la entidad (ej: Project relatedBy Thesis)
+        f"DELETE WHERE {{ ?s ?p <{entity_uri}> }}",
+    ]
+
+
 def _to_data_block(triples):
     """Serializa triples como N-Triples (URIs completas, sin prefijos), la
     sintaxis que aceptan los bloques INSERT DATA/DELETE DATA de SPARQL."""
@@ -352,6 +366,12 @@ def process_event(table, msg_value, cso_lookup, name_index=None):
 
     after = payload["after"]
     if after is None:
+        # Debezium manda primero el DELETE de la entidad y recién después los
+        # de las filas de join que borra el CASCADE; para cuando llegan, la
+        # entidad ya no está en GraphDB y no se pueden resolver. Por eso los
+        # triples entrantes se limpian acá, en el delete de la entidad
+        if old_uri is not None:
+            updates.extend(_incoming_relations_updates(old_uri))
         if updates:
             graphdb_client.run_update(" ;\n".join(updates))
         print(f"[{table}] DELETE -> se borró {old_uri} (-{len(old_triples)} triples)")
