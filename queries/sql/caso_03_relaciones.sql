@@ -19,10 +19,54 @@ WITH persona AS (
     FROM "Member"
     WHERE slug = 'diego-torres'
 ),
+autores_fragmentos AS (
+    -- Las publicaciones también tienen autoría en el texto de Publication.authors,
+    -- no solo en _PublicationMembers. Lo partimos en un fragmento por autor y
+    -- lo normalizamos (tildes, puntos, comas) como normalize_name() en transform.py
+    SELECT p.id AS publication_id,
+           f.ord AS fragmento,
+           string_to_array(
+               trim(regexp_replace(
+                   translate(lower(f.texto), 'áéíóúüñ', 'aeiouun'),
+                   '[.,\s]+', ' ', 'g'
+               )),
+               ' '
+           ) AS palabras
+    FROM "Publication" p
+    CROSS JOIN LATERAL regexp_split_to_table(
+        p.authors, '\s+(?:and|e|y|&)\s+|;'
+    ) WITH ORDINALITY AS f(texto, ord)
+    WHERE p.authors IS NOT NULL
+      AND lower(trim(p.authors)) NOT IN ('raw reference', 'unknown')
+),
+miembros_palabras AS (
+    SELECT m.id AS member_id,
+           string_to_array(
+               trim(regexp_replace(
+                   translate(lower(m."firstName" || ' ' || m."lastName"), 'áéíóúüñ', 'aeiouun'),
+                   '[.,\s]+', ' ', 'g'
+               )),
+               ' '
+           ) AS palabras
+    FROM "Member" m
+),
+autoria_por_texto AS (
+    -- el fragmento matchea si están todas las palabras del nombre del Member;
+    -- si matchea con más de uno no adivinamos (igual que resolve_person)
+    SELECT af.publication_id, mp.member_id,
+           COUNT(*) OVER (PARTITION BY af.publication_id, af.fragmento) AS candidatos
+    FROM autores_fragmentos af
+    JOIN miembros_palabras mp ON mp.palabras <@ af.palabras
+),
+autorias AS (
+    SELECT "A", "B" FROM "_PublicationMembers"
+    UNION
+    SELECT member_id, publication_id FROM autoria_por_texto WHERE candidatos = 1
+),
 produccion AS (
     SELECT p.id::text AS id, p.title, 'publicacion' AS tipo, 'tabla de join' AS fuente
     FROM "Publication" p
-    JOIN "_PublicationMembers" pm ON pm."B" = p.id
+    JOIN autorias pm ON pm."B" = p.id
     JOIN persona ON persona.id = pm."A"
 
     UNION ALL
