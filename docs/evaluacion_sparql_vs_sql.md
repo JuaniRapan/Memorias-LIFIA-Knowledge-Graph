@@ -56,7 +56,7 @@ En la base de datos relacional, "quién trabajó en una tesis"está modelado de 
 
 ### Queries
 
-`queries/sparql/caso_03_relaciones.rq` y `queries/sql/caso_03_relaciones.rq`
+`queries/sparql/caso_03_relaciones.rq` y `queries/sql/caso_03_relaciones.sql`
 
 |                                                    | SPARQL                                                                | SQL                                                                 |
 | -------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------- |
@@ -64,6 +64,10 @@ En la base de datos relacional, "quién trabajó en una tesis"está modelado de 
 | **Texto libre → persona**                          | Resuelto una vez en el ETL, queda como arista normal                  | Hay que resolverlo en cada query con ILIKE                          |
 | **Agregar una entidad más (Project, Scholarship)** | Una rama de UNION más, mismo patrón                                   | Repetir el mismo problema (FK + texto libre) para cada tabla nueva  |
 | **Confiabilidad del match**                        | La de resolve_person() (exacto, subconjunto o fuzzy match con umbral) | La de un ILIKE de substring, sin normalización                      |
+
+Las publicaciones tienen el mismo problema que las tesis: además de `_PublicationMembers`, el campo de texto `Publication.authors` también dice quién escribió qué, y el ETL lo resuelve contra Member. Por eso la rama de publicaciones del SQL necesita la CTE `autorias`, que parte `authors` por autor, lo normaliza y lo matchea con los Member (la misma del caso 2). Sin ella, el SQL devolvía una publicación menos que SPARQL (`Adaptive gamification in Collaborative systems, a systematic mapping study`), que solo se vincula a la persona por el texto de `authors`.
+
+También hay una diferencia en las tesis: `Interoperabilidad semántica en el manejo de datos normativos…` llega al grafo por tabla de join y por texto libre, pero el `ILIKE '%nombre%apellido%'` del SQL no la encuentra por texto libre (el nombre está escrito en otro orden o con otra forma). Las dos queries devuelven la misma fila, pero con una fuente distinta. Es un ejemplo concreto de por qué el `ILIKE` es frágil.
 
 En este caso se muestra la integración de datos y mejora del modelo que se hace con el ETL. Mas allá de las ventajas del grafo, tambien se mejoraron cuestiones de la base de datos relacional como este tipo de información que no está resuelta.
 
@@ -84,5 +88,7 @@ En la base relacional, Member.orcid y Member.dblpProfile son columnas de texto (
 | **Qué es el dato**?           | Una afirmación de identidad estándar (owl:sameAs) | Un string en una columna de texto, sin tipo        |
 | **Formato garantizado**       | Sí: IRI limpia, normalizada una vez en el ETL     | No: URL completa o solo el id, según cómo se cargó |
 | **Reusable por otro sistema** | Sí, es vocabulario público (OWL)                  | No, es una convención interna del proyecto         |
+
+Como en los casos 2 y 3, las publicaciones de una persona salen de `_PublicationMembers` y del texto de `Publication.authors`. El grafo ya las tiene unificadas como `vivo:Authorship`, pero el SQL tiene que repetir la resolución de nombres con la CTE `autorias`; sin ella faltaba una publicación respecto a SPARQL.
 
 En este caso, no suma valor que la consulta sea mas corta o mas eficiente, se busca mostrar un ejemplo que represente la idea de **Linked Data**. El grafo puede usar como punto de entrada un identificador que no controlamos nosotros, y tratarlo con el mismo vocabulario estándar que el resto de la Web de Datos.
