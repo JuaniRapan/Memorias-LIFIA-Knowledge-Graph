@@ -39,34 +39,34 @@ Los campos que contienen URLs se guardan como IRI **solo si tienen forma de URL*
 
 ### Member
 
-| Columna SQL                                                             | Propiedad RDF                           |
-| ----------------------------------------------------------------------- | --------------------------------------- |
-| `firstName` / `lastName`                                                | `foaf:firstName` / `foaf:lastName`      |
-| `personalEmail`, `institutionalEmail`                                   | `foaf:mbox`                             |
-| `phone`                                                                 | `foaf:phone`                            |
-| `webPage`                                                               | `foaf:homepage`                         |
-| `avatarUrl`                                                             | `foaf:depiction`                        |
-| `highestDegree`                                                         | `lifia-ontology:highestDegree`          |
-| `positionAtLab`, `positionAtUnlp`, `positionAtCIC`, `positionAtCONICET` | `lifia-ontology:jobTitle`               |
-| `category`, `sicadiCategory`, `affiliations`                            | `rdfs:comment`                          |
-| `shortCvIn{Spanish,English}`                                            | `lifia-ontology:shortCv` (`@es`/`@en`)  |
+| Columna SQL                                                             | Propiedad RDF                                    |
+| ----------------------------------------------------------------------- | ------------------------------------------------ |
+| `firstName` / `lastName`                                                | `foaf:firstName` / `foaf:lastName`               |
+| `personalEmail`, `institutionalEmail`                                   | `foaf:mbox`                                      |
+| `phone`                                                                 | `foaf:phone`                                     |
+| `webPage`                                                               | `foaf:homepage`                                  |
+| `avatarUrl`                                                             | `foaf:depiction`                                 |
+| `highestDegree`                                                         | `lifia-ontology:highestDegree`                   |
+| `positionAtLab`, `positionAtUnlp`, `positionAtCIC`, `positionAtCONICET` | `lifia-ontology:jobTitle`                        |
+| `category`, `sicadiCategory`, `affiliations`                            | `rdfs:comment`                                   |
+| `shortCvIn{Spanish,English}`                                            | `lifia-ontology:shortCv` (`@es`/`@en`)           |
 | `interestsIn{Spanish,English}`                                          | `lifia-ontology:researchInterests` (`@es`/`@en`) |
-| `orcid`                                                                 | `owl:sameAs` → `https://orcid.org/{id}` |
-| `dblpProfile`                                                           | `owl:sameAs` → URL de DBLP              |
-| `googleResearchProfile`, `researchGateProfile`                          | `rdfs:seeAlso`                          |
+| `orcid`                                                                 | `owl:sameAs` → `https://orcid.org/{id}`          |
+| `dblpProfile`                                                           | `owl:sameAs` → URL de DBLP                       |
+| `googleResearchProfile`, `researchGateProfile`                          | `rdfs:seeAlso`                                   |
 
 ### Publication
 
-| Columna SQL                        | Propiedad RDF                                                   |
-| ---------------------------------- | --------------------------------------------------------------- |
-| `title`                            | `dc:title`                                                      |
-| `year`                             | `vivo:dateIssued` → nodo `vivo:DateTimeValue` (ver §4)          |
-| `selfArchivingUrl`                 | `bibo:uri`                                                      |
-| `ranking`                          | `rdfs:comment`                                                  |
-| `authors`                          | `dc:creator` (texto libre, split por " and "; incluye externos) |
-| `bibtexData.doi`                   | `bibo:doi`                                                      |
-| `bibtexData.pages`                 | `bibo:pageStart` / `bibo:pageEnd`                               |
-| `bibtexData.journal` / `booktitle` | `bibo:presentedAt` → Venue                                      |
+| Columna SQL                        | Propiedad RDF                                                                                        |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `title`                            | `dc:title`                                                                                           |
+| `year`                             | `vivo:dateIssued` → nodo `vivo:DateTimeValue` (ver §4)                                               |
+| `selfArchivingUrl`                 | `bibo:uri`                                                                                           |
+| `ranking`                          | `rdfs:comment`                                                                                       |
+| `authors`                          | `dc:creator` (texto libre, split por "and"; incluye externos) y `vivo:Authorship` por autor (ver §4) |
+| `bibtexData.doi`                   | `bibo:doi`                                                                                           |
+| `bibtexData.pages`                 | `bibo:pageStart` / `bibo:pageEnd`                                                                    |
+| `bibtexData.journal` / `booktitle` | `bibo:presentedAt` → Venue                                                                           |
 
 ### Project
 
@@ -117,17 +117,17 @@ Ambos son siempre **objeto** de un triple, nunca sujeto.
 
 El triple es siempre `A → B`, donde `A` es el modelo que va primero alfabéticamente (convención de Prisma, verificada contra los UUID reales).
 
-| Tabla                  | Triple generado                                                   |
-| ---------------------- | ----------------------------------------------------------------- |
+| Tabla                  | Triple generado                                                                  |
+| ---------------------- | -------------------------------------------------------------------------------- |
 | `_ProjectMembers`      | Member `vivo:relatedBy` **MemberRole** `vivo:roleContributesTo` Project (ver §4) |
-| `_PublicationMembers`  | Member `vivo:relatedBy` **Authorship** `vivo:relates` Publication |
-| `_ScholarshipMembers`  | Member `vivo:relatedBy` **Relationship** `vivo:relates` Scholarship (ver §4) |
-| `_ThesisMembers`       | Member `vivo:relatedBy` **Relationship** `vivo:relates` Thesis (ver §4) |
-| `_ProjectPublications` | Project `vivo:relatedBy` Publication                              |
-| `_ProjectScholarships` | Project `vivo:relatedBy` Scholarship                              |
-| `_ProjectTheses`       | Project `vivo:relatedBy` Thesis                                   |
-| `_ThesisPublications`  | Publication `vivo:relatedBy` Thesis                               |
-| `_ThesisScholarships`  | Scholarship `vivo:relatedBy` Thesis                               |
+| `_PublicationMembers`  | Member `vivo:relatedBy` **Authorship** `vivo:relates` Publication                |
+| `_ScholarshipMembers`  | Member `vivo:relatedBy` **Relationship** `vivo:relates` Scholarship (ver §4)     |
+| `_ThesisMembers`       | Member `vivo:relatedBy` **Relationship** `vivo:relates` Thesis (ver §4)          |
+| `_ProjectPublications` | Project `vivo:relatedBy` Publication                                             |
+| `_ProjectScholarships` | Project `vivo:relatedBy` Scholarship                                             |
+| `_ProjectTheses`       | Project `vivo:relatedBy` Thesis                                                  |
+| `_ThesisPublications`  | Publication `vivo:relatedBy` Thesis                                              |
+| `_ThesisScholarships`  | Scholarship `vivo:relatedBy` Thesis                                              |
 
 ---
 
@@ -143,22 +143,35 @@ El triple es siempre `A → B`, donde `A` es el modelo que va primero alfabétic
 
 ### Resolución de nombres en texto libre
 
-Los campos `director`, `coDirector`, `student` y `otherAdvisors` son texto, no FK. Se resuelven contra `Member` probando, en orden:
+Los campos `director`, `coDirector`, `student`, `otherAdvisors` y `Publication.authors` son texto, no FK. Se resuelven contra `Member` probando, en orden:
 
 1. Nombre tal cual.
 2. Invertido ("Apellido, Nombre").
 3. Sin nombres del medio.
 4. Por subconjunto de palabras.
-5. Fuzzy matching (`difflib`, umbral 0.85).
+5. Por iniciales ("G. Rossi"): matchea si hay un único `Member` con ese apellido cuyo nombre empiece con la inicial. Si hay más de uno, no matchea.
+6. Fuzzy matching (`difflib`, umbral 0.85).
 
-(En caso de que no matchee, se descarta y queda en el log).
+Si no matchea ningún `Member` pero el texto tiene forma de nombre de persona, se crea una persona externa (`persona-externa`, sin `vivo:FacultyMember`). Si no tiene forma de nombre, se descarta. En los dos casos queda registrado en el log.
+
+`looks_like_a_name` considera que algo no es un nombre si tiene más de 4 palabras de contenido (no cuentan `de`, `del`, `la`, `las`, `los`, `do`, `da`, `dos`, `das`). Si el texto tiene alguna partícula portuguesa se permite una palabra más, porque los nombres brasileños suelen ser más largos.
+
+**Cómo se parte `Publication.authors`** (`split_authors`):
+
+- **Separadores de personas:** `and`, `e`, `y`, `&` y `;`. Pueden venir con saltos de línea o espacios múltiples alrededor, porque los `.bib` los parten en varias líneas.
+- **Coma, según el formato:**
+  - Si hay partes que son solo iniciales, es formato APA (`Capelli, T., Lliteras, A.`): se emparejan apellido e iniciales y se dan vuelta.
+  - Si una de las dos partes es una sola palabra, es "Apellido, Nombre" (el apellido puede ser compuesto: `Perez Castillo, Ricardo`).
+  - Si todas las partes tienen nombre y apellido, la coma separa personas.
+  - Si el campo usa `;`, la coma de cada fragmento es siempre "Apellido, Nombre".
+- **Placeholders:** `Raw Reference` y `Unknown` (lo que carga la base cuando no hay autores reales) se ignoran, tanto para las autorías como para `dc:creator`.
 
 Todos los casos quedan registrados en `data/processed/relaciones_sin_resolver.csv`.
 
 ### Otras notas
 
 - **`id` vs. `slug`:** el `slug` arma la IRI. El id se guarda como `dcterms:identifier` para trazar cada nodo hasta su fila de la bd relacional, aunque cambie el slug.
-- **`authors` vs. `_PublicationMembers`:** `dc:creator` guarda todos los autores como texto (también los externos). `Authorship` enlaza solo a los autores internos.
+- **`authors` vs. `_PublicationMembers`:** `dc:creator` guarda todos los autores como texto original (también los externos, sin dar vuelta "Apellido, Nombre"). `Authorship` se crea tanto desde `_PublicationMembers` (internos) como desde la resolución de `authors`, que enlaza con un `Member` si lo encuentra y si no con una persona externa.
 - **Topics:** cada tag o keyword se normaliza y se compara contra `data/external/cso.csv`. `Thesis.keywords` es un string, no un array: `split_keywords()` decide si separar por `,` o `;`.
 - **Venues:** se deduplican por slug del nombre.
 - **Namespaces propios:** `lifia:` (`http://lifia.info.unlp.edu.ar/resource/`) es solo para instancias. `lifia-ontology:` es para propiedades sin equivalente externo que respete el dominio/rango real de VIVO: `completionPercentage`, `highestDegree`, `jobTitle` (VIVO pediría un nodo `Position` por cargo), `shortCv` y `researchInterests` (VIVO tiene `overview`, pero es `owl:FunctionalProperty` y acá hay hasta 4 valores por persona).
