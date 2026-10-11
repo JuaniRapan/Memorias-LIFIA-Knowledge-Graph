@@ -473,9 +473,9 @@ def transform_publication_row(graph, row, topic_uris, venue_uris):
     # original. Las autorías como nodo (Member o persona externa) se arman
     # aparte, desde TEXT_RELATIONS y desde la tabla _PublicationMembers
     authors_raw = row["authors"]
-    if has_value(authors_raw) and str(authors_raw).strip():
-        for author in str(authors_raw).split(" and "):
-            author = author.strip()
+    if has_value(authors_raw) and str(authors_raw).strip().lower() not in AUTHORS_PLACEHOLDERS:
+        # el "and" puede venir con saltos de línea alrededor, igual que en split_authors
+        for author in re.split(r"\s+and\s+", str(authors_raw).strip()):
             if author:
                 graph.add((uri, DC.creator, Literal(author)))
 
@@ -685,7 +685,7 @@ def resolve_person(name, name_index, threshold=0.85):
     """Busca `name` contra un Member: primero match exacto (`resolve_exact`);
     si no, por subconjunto de palabras (nombre y apellido del Member están,
     en cualquier orden, entre las palabras del texto pero solo si matchea
-    un único Member); y si tampoco, fuzzy
+    un único Member); después por iniciales ("G. Rossi"); y si tampoco, fuzzy
     con difflib. None si no hay nada confiable."""
     index, wordsets, fuzzy_index = name_index
     person_uri = resolve_exact(name, name_index)
@@ -700,6 +700,22 @@ def resolve_person(name, name_index, threshold=0.85):
     subset_matches = {uri for member_words, uri in wordsets if member_words <= query_words}
     if len(subset_matches) == 1:
         return subset_matches.pop()
+
+    # "G. Rossi": iniciales adelante y el resto del nombre, buscamos un único
+    # Member cuyas palabras incluyan el resto y tengan una que arranque con cada inicial
+    words = normalized.split()
+    initials = [w for w in words[:-1] if len(w) == 1] if len(words) >= 2 else []
+    rest = {w for w in words if len(w) > 1}
+    if initials and rest and len(initials) + len(rest) == len(words):
+        initial_matches = set()
+        for member_words, uri in wordsets:
+            remaining = sorted(member_words - rest)
+            if rest <= member_words and all(
+                any(w.startswith(i) for w in remaining) for i in initials
+            ):
+                initial_matches.add(uri)
+        if len(initial_matches) == 1:
+            return initial_matches.pop()
 
     for candidate in _name_candidates(normalized):
         matches = difflib.get_close_matches(candidate, fuzzy_index, n=1, cutoff=threshold)
@@ -753,14 +769,20 @@ TEXT_RELATIONS = [
 # "de contenido"; si un fragmento tiene más, es más probable que sea un dato
 # mal cargado que un nombre. 
 MAX_NAME_WORDS = 4
-NAME_PARTICLES = {"de", "del", "la", "las", "los"}
+# partículas del portugués: los nombres brasileños suelen ser más largos
+# ("Julio Cesar Sampaio do Prado Leite"), así que si aparece alguna se permite
+# una palabra de contenido más
+PORTUGUESE_PARTICLES = {"do", "da", "dos", "das"}
+NAME_PARTICLES = {"de", "del", "la", "las", "los"} | PORTUGUESE_PARTICLES
 
 
 def looks_like_a_name(name):
     """False si `name` parece no ser un nombre de persona (demasiadas
     palabras de contenido: un título de tesis, una oración, etc.)."""
-    content_words = [w for w in normalize_name(name).split() if w not in NAME_PARTICLES]
-    return len(content_words) <= MAX_NAME_WORDS
+    words = normalize_name(name).split()
+    content_words = [w for w in words if w not in NAME_PARTICLES]
+    max_words = MAX_NAME_WORDS + 1 if PORTUGUESE_PARTICLES & set(words) else MAX_NAME_WORDS
+    return len(content_words) <= max_words
 
 
 def strip_label_prefix(raw_value):
@@ -771,7 +793,8 @@ def strip_label_prefix(raw_value):
     raw_value = re.sub(r"\([^)]*\)?", "", raw_value)
     # hay campos con el año de la tesis pegado al nombre ("Coria, Juan Manuel 2017 ")
     raw_value = re.sub(r"\b(?:19|20)\d{2}\b", "", raw_value)
-    return raw_value.strip()
+    # a veces queda un punto o coma colgando al final ("Rocio Rodriguez.")
+    return raw_value.strip().rstrip(".,; ")
 
 
 def split_block(block):
@@ -796,17 +819,72 @@ def split_names(raw_value):
     return nombres
 
 
+# valor que viene en authors cuando la publicación se cargó como referencia
+# cruda y no hay lista de autores real
+AUTHORS_PLACEHOLDERS = {"raw reference", "unknown"}
+
+
+def is_initials(part):
+    """True si `part` son solo iniciales ("T.", "C. J.", "J.L.")."""
+    tokens = part.replace(".", " ").split()
+    return bool(tokens) and all(len(t) == 1 for t in tokens)
+
+
+def split_author_chunk(chunk):
+    """Parte un fragmento de authors que tiene comas: formato APA ("Capelli, T.,
+    Lliteras, A."), "Apellido, Nombre" o una lista de nombres completos."""
+    partes = [p.strip() for p in chunk.split(",") if p.strip()]
+    if len(partes) <= 1:
+        return partes
+
+    # APA: el apellido viene seguido de sus iniciales, los emparejamos y damos vuelta
+    if any(is_initials(p) for p in partes):
+        nombres = []
+        i = 0
+        while i < len(partes):
+            if i + 1 < len(partes) and is_initials(partes[i + 1]) and not is_initials(partes[i]):
+                nombres.append(f"{partes[i + 1]} {partes[i]}")
+                i += 2
+            else:
+                nombres.append(partes[i])
+                i += 1
+        return nombres
+
+    # "Apellido, Nombre" (el apellido puede ser compuesto: "Perez Castillo, Ricardo");
+    # si una de las dos partes es una sola palabra no puede ser una lista de personas
+    if len(partes) == 2 and (len(partes[0].split()) == 1 or len(partes[1].split()) == 1):
+        return [f"{partes[1]} {partes[0]}"]
+
+    # si todas las partes tienen nombre y apellido, la coma separa personas
+    if all(len(p.split()) >= 2 for p in partes):
+        return partes
+
+    return [chunk.strip()]
+
+
 def split_authors(raw_value):
-    """Separa Publication.authors: cada " and " es un autor y si viene como
-    "Apellido, Nombre" lo damos vuelta (la coma acá no separa personas)."""
+    """Separa Publication.authors por "and"/"e"/"y"/"&" y, dentro de cada
+    fragmento, por coma según el formato (APA, "Apellido, Nombre" o lista)."""
     nombres = []
-    for author in str(raw_value).split(" and "):
-        author = strip_label_prefix(author)
-        partes = [p.strip() for p in author.split(",") if p.strip()]
-        if len(partes) == 2:
-            author = f"{partes[1]} {partes[0]}"
-        if author.strip():
-            nombres.append(author.strip())
+    if str(raw_value).strip().lower() in AUTHORS_PLACEHOLDERS:
+        return nombres
+    # el separador puede venir con saltos de línea o varios espacios alrededor
+    # (los .bib los parten en varias líneas), por eso regex y no split(" and ")
+    for chunk in re.split(r"\s+(?:and|e|y|&)\s+|;", str(raw_value).strip()):
+        # hay campos con el separador duplicado ("Julieta Arancio and   and Emilio Velis")
+        chunk = strip_label_prefix(re.sub(r"^(?:and|&)\s+", "", chunk.strip()))
+        # si el campo usa ";" para separar personas, la coma de cada fragmento
+        # es siempre "Apellido, Nombre" (incluso con apellidos de dos palabras)
+        partes = [p.strip() for p in chunk.split(",") if p.strip()]
+        if ";" in str(raw_value) and len(partes) == 2:
+            authors = [f"{partes[1]} {partes[0]}"]
+        else:
+            authors = split_author_chunk(chunk)
+        for author in authors:
+            # sacamos puntos o comas sueltos del final ("Alejandra Garrido.")
+            author = author.strip().rstrip(".,; ")
+            if author:
+                nombres.append(author)
     return nombres
 
 
