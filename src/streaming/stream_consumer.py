@@ -113,7 +113,12 @@ def load_name_index():
     if conn is None:
         raise RuntimeError("No se pudo conectar a Postgres para armar el índice de nombres")
     try:
-        df_member = pd.read_sql('SELECT id, slug, "firstName", "lastName" FROM public."Member"', conn)
+        # usamos el cursor directo y armamos el DataFrame a mano: pd.read_sql
+        # con una conexión psycopg2 cruda tira un UserWarning
+        with conn.cursor() as cursor:
+            cursor.execute('SELECT id, slug, "firstName", "lastName" FROM public."Member"')
+            columns = [col.name for col in cursor.description]
+            df_member = pd.DataFrame(cursor.fetchall(), columns=columns)
     finally:
         conn.close()
 
