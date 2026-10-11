@@ -30,11 +30,13 @@ En este caso se muestra tanto la reutilización de vocabularios publicados (Link
 
 **La consulta**: Dado un investigador del LIFIA, ¿quiénes son sus colegas de colegas con los que todavía NO publicó directamente?
 Podría servir para recomendaciones de posibles colaboraciones dentro del centro.
-La fuente de "quién escribió qué" en ambos modelos es la relación autor-publicación. En Postgres es la tabla de join \_PublicationMembers, en el grafo cada fila de esa tabla se representa como un nodo intermedio `vivo:Authorship`, que la persona y la publicación alcanzan con `vivo:relatedBy` y que apunta a las dos con `vivo:relates` (`persona → autoría → publicación`). Por eso cada "salto" autor-coautor en SPARQL recorre dos aristas en vez de una.
+La fuente de "quién escribió qué" en ambos modelos es la relación autor-publicación. En Postgres está modelada de dos formas al mismo tiempo: la tabla de join \_PublicationMembers y el campo de texto libre `Publication.authors`. En el grafo cada autoría (una por fila de esa tabla y una por cada autor de `authors` que se resuelve contra Member) se representa como un nodo intermedio `vivo:Authorship`, que la persona y la publicación alcanzan con `vivo:relatedBy` y que apunta a las dos con `vivo:relates` (`persona → autoría → publicación`). Por eso cada "salto" autor-coautor en SPARQL recorre dos aristas en vez de una.
 
 ### Queries
 
-`queries/sparql/caso_02_n_saltos.rq` y `quereis/sql/caso_02_n_saltos.sql`
+`queries/sparql/caso_02_n_saltos.rq` y `queries/sql/caso_02_n_saltos.sql`
+
+La resolución de `authors` contra Member la hace `transform.py` una sola vez al construir el grafo, así que la query SPARQL no sabe que existe. En SQL hay que repetirla dentro de la consulta: la CTE `autorias` parte `authors` por autor, normaliza tildes y puntuación, y matchea cada fragmento con los Member cuyo nombre y apellido estén todos en él. Sin esa CTE, el SQL devolvía menos colegas que el grafo (por ejemplo, Martín Urbieta aparecía solo en SPARQL, porque figuraba en el texto de `authors` pero no en `_PublicationMembers`).
 
 |                          | SPARQL                                                                    | SQL                                                      |
 | ------------------------ | ------------------------------------------------------------------------- | -------------------------------------------------------- |
@@ -43,7 +45,7 @@ La fuente de "quién escribió qué" en ambos modelos es la relación autor-publ
 | **N saltos**             | Se ajusta la cantidad de segmentos del path                               | WITH RECURSIVE con ajuste manual de ciclos               |
 | **Legibilidad**          | El camino se lee como se recorre: persona → pub → coautor → pub → coautor | Cadena de joins con alias (pm1..pm4)                     |
 
-Este caso muestra la fortaleza del grafo en las consultas de alcance N (relaciones a mas de un salto de distancia), la estructura de datos es la misma que la pregunta. En la parte relacional, cada salto extra es un JOIN mas que se agrega a mano.
+Este caso muestra la fortaleza del grafo en las consultas de alcance N (relaciones a mas de un salto de distancia), la estructura de datos es la misma que la pregunta. En la parte relacional, cada salto extra es un JOIN mas que se agrega a mano. Además, la CTE de SQL solo aproxima el matching de nombres (subconjunto de palabras): no cubre iniciales ("G. Rossi") ni el fuzzy con `difflib` que usa el pipeline, y es una lógica que en el grafo ya viene resuelta.
 
 ---
 
